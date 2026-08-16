@@ -444,7 +444,7 @@ Panel {
 
               Button {
                 visible: !root.namingProfile && root.profiles.length === 1
-                text: root.activeProfile || root.profiles[0].name
+                text: root.activeProfile || (root.profiles.length ? root.profiles[0].name : "")
                 fontSize: Style.font.caption
                 fontFamily: root.bar.fontFamily
                 foreground: root.bar.foreground
