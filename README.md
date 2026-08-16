@@ -6,6 +6,10 @@ Click the two-tile icon for a Power-style panel that stays open. Displays are dr
 
 The stock **Display** widget stays where it is (brightness, text size). Screens uses a two-tile mark so the two icons never collide.
 
+<p align="center">
+  <img src="preview.png" alt="Screens panel with a snap layout canvas, Desk profile, and per-display refresh controls" width="360">
+</p>
+
 | Click | Drag | Per screen | Profiles |
 | --- | --- | --- | --- |
 | Open the panel | Snap tiles to each other's edges | Resolution, Hz, HDR, VRR, scale, rotation, mirror, on/off | Save a desk, restore it on hotplug |
@@ -78,6 +82,7 @@ Screens.qml            Bar icon + click panel
 ScreenMark.qml         Two-tile bar/hero mark
 Model.js               Snap / normalize / mode helpers
 scripts/display-ctl    hyprctl snapshot + monitors.lua writer
+preview.png            Marketplace still
 install.sh             Enable / place the widget
 ```
 
