@@ -209,6 +209,14 @@ Panel {
     root.runStore(["profile", "save", name, payload])
   }
 
+  function firstProfileName() {
+    if (root.activeProfile) return root.activeProfile
+    var list = root.profiles
+    if (!list || list.length < 1) return ""
+    var p = list[0]
+    return (p && p.name) ? p.name : ""
+  }
+
   function deleteProfile() {
     var name = String(root.profileName || root.activeProfile || "").trim()
     if (!name) return
@@ -444,7 +452,7 @@ Panel {
 
               Button {
                 visible: !root.namingProfile && root.profiles.length === 1
-                text: root.activeProfile || (root.profiles.length ? root.profiles[0].name : "")
+                text: root.firstProfileName()
                 fontSize: Style.font.caption
                 fontFamily: root.bar.fontFamily
                 foreground: root.bar.foreground
