@@ -96,14 +96,10 @@ def logical_size(width, height, scale, transform):
 
 
 def detected_label(mon):
-    # Use Hyprland's own strings. Do not invent marketing names.
-    desc = " ".join((mon.get("description") or "").split())
-    if desc:
-        return desc
-    make = " ".join((mon.get("make") or "").split())
     model = " ".join((mon.get("model") or "").split())
-    bits = [p for p in (make, model) if p]
-    return " ".join(bits) or mon.get("name") or "Display"
+    if model:
+        return model
+    return mon.get("name") or "Display"
 
 
 def drm_edid_path(name):
@@ -194,6 +190,25 @@ def vrr_mode(mon):
         return 0
 
 
+def parse_lua_vrr(text):
+    found = {}
+    for block in re.findall(r"hl\.monitor\(\{\s*(.*?)\s*\}\)", text or "", re.S):
+        out = re.search(r'output\s*=\s*"([^"]+)"', block)
+        if not out or not out.group(1):
+            continue
+        m = re.search(r"vrr\s*=\s*(\d+)", block)
+        found[out.group(1)] = int(m.group(1)) if m else 0
+    return found
+
+
+def read_monitors_lua():
+    try:
+        with open(MONITORS_LUA, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
 def is_hdr(mon):
     cm = str(mon.get("colorManagementPreset") or "").lower()
     fmt = str(mon.get("currentFormat") or "").upper()
@@ -255,6 +270,7 @@ def snapshot():
         mirror = mon.get("mirrorOf") or ""
         if mirror == "none":
             mirror = ""
+        vrr = vrr_mode(mon)
         entry = {
             "name": name,
             "description": mon.get("description") or "",
@@ -270,7 +286,7 @@ def snapshot():
             "y": int(mon.get("y") or 0),
             "scale": float(scale),
             "transform": transform,
-            "vrr": vrr_mode(mon),
+            "vrr": vrr,
             "cm": mon.get("colorManagementPreset") or "srgb",
             "format": mon.get("currentFormat") or "",
             "hdr": hdr_on,
@@ -286,10 +302,26 @@ def snapshot():
         }
         entry["identity"] = monitor_identity(entry)
         monitors.append(entry)
+    lua_vrr = parse_lua_vrr(read_monitors_lua())
+    for entry in monitors:
+        key = entry.get("identity") or ""
+        if key in lua_vrr:
+            entry["vrr"] = lua_vrr[key]
+        elif entry.get("name") in lua_vrr:
+            entry["vrr"] = lua_vrr[entry["name"]]
     monitors.sort(key=lambda m: (not m["enabled"], m["x"], m["y"], m["name"]))
     store = load_store()
     ids = [m["identity"] for m in monitors if m.get("identity")]
     match = match_profile(store, ids)
+    primary = store.get("primary") or ""
+    if not primary:
+        focused = next((m for m in monitors if m.get("focused")), None)
+        if focused and focused.get("identity"):
+            primary = focused["identity"]
+            store["primary"] = primary
+            save_store(store)
+    if primary and not any(m.get("identity") == primary for m in monitors):
+        primary = ""
     return {
         "monitors": monitors,
         "profiles": [
@@ -300,6 +332,7 @@ def snapshot():
         "active": store.get("active") or "",
         "autoSwitch": bool(store.get("autoSwitch", True)),
         "match": match or "",
+        "primary": primary,
         "connectedKey": "\n".join(sorted(ids)),
     }
 
@@ -330,7 +363,7 @@ def connected_key(monitors):
 
 
 def load_store():
-    store = {"active": "", "autoSwitch": True, "lastKey": "", "profiles": []}
+    store = {"active": "", "autoSwitch": True, "lastKey": "", "primary": "", "profiles": []}
     try:
         with open(PROFILES_PATH, encoding="utf-8") as fh:
             data = json.load(fh)
@@ -338,6 +371,7 @@ def load_store():
             store["active"] = str(data.get("active") or "")
             store["autoSwitch"] = bool(data.get("autoSwitch", True))
             store["lastKey"] = str(data.get("lastKey") or "")
+            store["primary"] = str(data.get("primary") or "")
             profiles = data.get("profiles")
             if isinstance(profiles, list):
                 store["profiles"] = profiles
@@ -410,9 +444,9 @@ def monitor_lua(mon, used_desc):
     transform = int(mon.get("transform") or 0)
     if transform:
         fields.append("transform = %d" % transform)
-    vrr = int(mon.get("vrr") or 0)
-    if vrr:
-        fields.append("vrr = %d" % vrr)
+    # Always persist VRR. hyprctl often reports it as a boolean false even
+    # when the compositor is using the per-output setting.
+    fields.append("vrr = %d" % int(mon.get("vrr") or 0))
     if mon.get("hdr"):
         fields.append("bitdepth = 10")
         fields.append('cm = "hdr"')
@@ -438,6 +472,11 @@ def render_lua(monitors, gdk_scale):
         if mon.get("name") or mon.get("description"):
             lines.append(monitor_lua(mon, used))
     lines.append('hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })')
+    max_vrr = 0
+    for mon in monitors:
+        if mon.get("enabled", True):
+            max_vrr = max(max_vrr, int(mon.get("vrr") or 0))
+    lines.append("hl.config({ misc = { vrr = %d } })" % max_vrr)
     lines.append(MANAGED_END)
     lines.append("")
     return "\n".join(lines) + "\n"
@@ -478,6 +517,11 @@ def write_monitors_lua(monitors):
         if mon.get("name") or mon.get("description"):
             inner.append(monitor_lua(mon, used))
     inner.append('hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })')
+    max_vrr = 0
+    for mon in monitors:
+        if mon.get("enabled", True):
+            max_vrr = max(max_vrr, int(mon.get("vrr") or 0))
+    inner.append("hl.config({ misc = { vrr = %d } })" % max_vrr)
     inner.append(MANAGED_END)
     block = "\n".join(inner) + "\n"
     spliced = splice_managed(existing, block)
@@ -518,6 +562,11 @@ def apply(payload):
             prev = fh.read()
     write_monitors_lua(monitors)
     reload_hypr()
+    max_vrr = 0
+    for mon in monitors:
+        if mon.get("enabled", True):
+            max_vrr = max(max_vrr, int(mon.get("vrr") or 0))
+    run(["hyprctl", "eval", "hl.config({ misc = { vrr = %d } })" % max_vrr])
     errors = config_errors()
     if errors:
         if prev:
@@ -625,6 +674,14 @@ def set_auto(value):
     return 0
 
 
+def set_primary(identity):
+    store = load_store()
+    store["primary"] = (identity or "").strip()
+    save_store(store)
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
+
+
 def identify(name=None):
     data = snapshot()
     targets = data["monitors"]
@@ -671,6 +728,8 @@ def main(argv):
             return apply_profile(argv[2] if len(argv) > 2 else "")
         if action == "auto":
             return set_auto(argv[2] if len(argv) > 2 else "1")
+        if action == "primary":
+            return set_primary(argv[2] if len(argv) > 2 else "")
         print("profile: unknown action: %s" % action, file=sys.stderr)
         return 2
     print("unknown command: %s" % cmd, file=sys.stderr)

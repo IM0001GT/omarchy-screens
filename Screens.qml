@@ -10,6 +10,7 @@ Panel {
   id: root
   moduleName: "im0001gt.screens"
   ipcTarget: "im0001gt.screens"
+  manageIpc: false
 
   readonly property string ctl:
     Quickshell.env("HOME") + "/.config/omarchy/plugins/" + root.moduleName + "/scripts/display-ctl"
@@ -33,6 +34,8 @@ Panel {
   property string connectedKey: ""
   property string lastKey: ""
   property string profileName: "Desk"
+  property string primaryId: ""
+  property bool userPicked: false
 
   readonly property var selected: {
     if (selectedIndex < 0 || selectedIndex >= monitors.length) return null
@@ -50,11 +53,18 @@ Panel {
     { value: "2", label: "Upside down" },
     { value: "3", label: "Portrait 270°" }
   ]
-  readonly property var vrrOptions: [
-    { value: "0", label: "Off" },
-    { value: "1", label: "Always" },
-    { value: "2", label: "Fullscreen" }
-  ]
+  readonly property string barScreenName: {
+    var win = button.QsWindow ? button.QsWindow.window : null
+    return (win && win.screen) ? String(win.screen.name) : ""
+  }
+  readonly property bool isFocusedBar: {
+    for (var i = 0; i < monitors.length; i++) {
+      if (monitors[i].focused && monitors[i].name === barScreenName) return true
+    }
+    return false
+  }
+  readonly property bool selectedHdrOk: !!(selected && selected.hdrCapable)
+  readonly property bool selectedVrrOk: !!(selected && selected.vrrCapable)
 
   function refresh() {
     if (!stateProc.running) stateProc.running = true
@@ -67,13 +77,13 @@ Panel {
     root.activeProfile = (data && data.active) ? String(data.active) : ""
     root.autoSwitch = !data || data.autoSwitch !== false
     root.matchProfile = (data && data.match) ? String(data.match) : ""
-    if (root.activeProfile && !(profileNameField && profileNameField.activeFocus))
-      root.profileName = root.activeProfile
-    if (root.selectedIndex >= list.length) root.selectedIndex = Math.max(0, list.length - 1)
-    if (list.length && (root.selectedIndex < 0 || !list[root.selectedIndex])) {
-      for (var i = 0; i < list.length; i++) {
-        if (list[i].focused) { root.selectedIndex = i; break }
-      }
+    root.primaryId = (data && data.primary) ? String(data.primary) : ""
+    if (root.activeProfile) root.profileName = root.activeProfile
+    if (!root.userPicked) {
+      var pick = Model.preferredIndex(list, root.barScreenName, root.primaryId)
+      if (pick >= 0) root.selectedIndex = pick
+    } else if (root.selectedIndex >= list.length) {
+      root.selectedIndex = Math.max(0, list.length - 1)
     }
     var key = (data && data.connectedKey) ? String(data.connectedKey) : ""
     var prev = root.lastKey
@@ -127,11 +137,13 @@ Panel {
     mutateSelected(function(m) { m.transform = parseInt(value, 10) || 0 })
   }
 
-  function setVrr(value) {
-    mutateSelected(function(m) { m.vrr = parseInt(value, 10) || 0 })
+  function setVrr(on) {
+    if (!root.selectedVrrOk) return
+    mutateSelected(function(m) { m.vrr = on ? 1 : 0 })
   }
 
   function setHdr(on) {
+    if (!root.selectedHdrOk) return
     mutateSelected(function(m) { m.hdr = !!on })
   }
 
@@ -178,6 +190,12 @@ Panel {
     root.runStore(["profile", "auto", on ? "1" : "0"])
   }
 
+  function setPrimary() {
+    if (!root.selected) return
+    root.userPicked = true
+    root.runStore(["profile", "primary", root.selected.identity || ""])
+  }
+
   function identify() {
     root.identifying = true
     identifyTimer.restart()
@@ -191,7 +209,21 @@ Panel {
   implicitHeight: button.implicitHeight
 
   Component.onCompleted: refresh()
-  onOpenedChanged: if (opened) refresh()
+  onOpenedChanged: {
+    if (!opened) return
+    root.userPicked = false
+    refresh()
+  }
+
+  IpcHandler {
+    enabled: root.isFocusedBar
+    target: "im0001gt.screens"
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function show(): void { root.open() }
+    function hide(): void { root.close() }
+    function toggle(): void { root.toggle() }
+  }
 
   Timer {
     interval: root.opened ? 4000 : 2000
@@ -275,8 +307,8 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(500))
-    contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight, Style.space(820))
+    contentWidth: panel.fittedContentWidth(Style.space(480))
+    contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight, Style.space(720))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -299,7 +331,7 @@ Panel {
         Column {
           id: panelColumn
           width: scrollArea.availableWidth
-          spacing: Style.space(14)
+          spacing: Style.space(10)
 
           Item {
             width: parent.width
@@ -360,41 +392,74 @@ Panel {
             }
           }
 
+          Row {
+            width: parent.width
+            spacing: Style.space(6)
+
+            Repeater {
+              model: root.profiles
+
+              Button {
+                required property var modelData
+                text: modelData.name
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                active: modelData.name === root.activeProfile
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(3)
+                onClicked: root.applyProfile(modelData.name)
+              }
+            }
+
+            Button {
+              text: "Save"
+              fontSize: Style.font.caption
+              fontFamily: root.bar.fontFamily
+              foreground: root.bar.foreground
+              bordered: true
+              horizontalPadding: Style.space(10)
+              verticalPadding: Style.space(3)
+              onClicked: root.saveProfile()
+            }
+
+            Button {
+              text: "Auto"
+              fontSize: Style.font.caption
+              fontFamily: root.bar.fontFamily
+              foreground: root.bar.foreground
+              bordered: true
+              active: root.autoSwitch
+              horizontalPadding: Style.space(10)
+              verticalPadding: Style.space(3)
+              onClicked: root.setAutoSwitch(!root.autoSwitch)
+            }
+
+            Button {
+              visible: root.profiles.length > 0
+              text: "Del"
+              fontSize: Style.font.caption
+              fontFamily: root.bar.fontFamily
+              foreground: root.bar.foreground
+              bordered: true
+              horizontalPadding: Style.space(10)
+              verticalPadding: Style.space(3)
+              onClicked: root.deleteProfile()
+            }
+
+          }
+
           PanelSeparator { foreground: root.bar.foreground }
 
           Column {
             width: parent.width
-            spacing: Style.space(8)
-
-            Item {
-              width: parent.width
-              implicitHeight: Math.max(layoutHeader.implicitHeight, layoutHint.implicitHeight)
-
-              PanelSectionHeader {
-                id: layoutHeader
-                text: "LAYOUT"
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
-                anchors.left: parent.left
-                anchors.verticalCenter: parent.verticalCenter
-              }
-
-              Text {
-                id: layoutHint
-                text: root.enabledCount + " connected"
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-              }
-            }
+            spacing: Style.space(6)
 
             Item {
               id: canvas
               width: parent.width
-              implicitHeight: Style.space(200)
+              implicitHeight: Style.space(168)
 
               readonly property int pad: Style.space(16)
               readonly property var box: Model.bounds(root.monitors)
@@ -508,6 +573,7 @@ Panel {
                   var i = hit(mouse.x, mouse.y)
                   if (i < 0) return
                   root.selectedIndex = i
+                  root.userPicked = true
                   root.dragging = true
                   root.dragIndex = i
                   root.dragOrigX = root.monitors[i].x
@@ -541,14 +607,6 @@ Panel {
               }
             }
 
-            Text {
-              width: parent.width
-              text: "Drag a screen to match your desk. Edges snap flush so the cursor never falls in a gap."
-              color: Qt.darker(root.bar.foreground, 1.4)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-            }
           }
 
           PanelSeparator { foreground: root.bar.foreground }
@@ -556,107 +614,6 @@ Panel {
           Column {
             width: parent.width
             spacing: Style.space(8)
-
-            Item {
-              width: parent.width
-              implicitHeight: Math.max(profileHeader.implicitHeight, profileHint.implicitHeight)
-
-              PanelSectionHeader {
-                id: profileHeader
-                text: "PROFILE"
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
-                anchors.left: parent.left
-                anchors.verticalCenter: parent.verticalCenter
-              }
-
-              Text {
-                id: profileHint
-                text: root.matchProfile !== "" ? ("match · " + root.matchProfile) : (root.profiles.length + " saved")
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-              }
-            }
-
-            Dropdown {
-              width: parent.width
-              label: "SAVED LAYOUTS"
-              showLabel: false
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              value: root.activeProfile
-              options: Model.profileOptions(root.profiles)
-              onChanged: function(v) { if (v && v !== root.activeProfile) root.applyProfile(v) }
-            }
-
-            TextField {
-              id: profileNameField
-              width: parent.width
-              text: root.profileName
-              placeholderText: "Desk"
-              font.pixelSize: Style.font.body
-              foreground: root.bar.foreground
-              onEditingFinished: root.profileName = text
-              onAccepted: root.saveProfile()
-            }
-
-            Row {
-              width: parent.width
-              spacing: Style.space(8)
-
-              Button {
-                width: (parent.width - parent.spacing * 2) / 3
-                text: "Save"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                onClicked: root.saveProfile()
-              }
-
-              Button {
-                width: (parent.width - parent.spacing * 2) / 3
-                text: "Apply"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                enabled: root.profileName !== ""
-                onClicked: root.applyProfile(root.profileName)
-              }
-
-              Button {
-                width: (parent.width - parent.spacing * 2) / 3
-                text: "Delete"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                enabled: root.profiles.length > 0
-                onClicked: root.deleteProfile()
-              }
-            }
-
-            Toggle {
-              width: parent.width
-              label: "Apply on connect"
-              description: "Restore the matching profile when a display is plugged in"
-              checked: root.autoSwitch
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              onClicked: root.setAutoSwitch(!root.autoSwitch)
-            }
-          }
-
-          PanelSeparator { foreground: root.bar.foreground }
-
-          Column {
-            width: parent.width
-            spacing: Style.space(10)
             visible: root.selected !== null
 
             Item {
@@ -665,7 +622,7 @@ Panel {
 
               PanelSectionHeader {
                 id: selHeader
-                text: "THIS SCREEN"
+                text: root.selected ? root.selected.label : "THIS SCREEN"
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
                 anchors.left: parent.left
@@ -684,41 +641,36 @@ Panel {
               }
             }
 
-            Text {
+            Row {
               width: parent.width
-              text: root.selected ? root.selected.label : ""
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
-              elide: Text.ElideRight
-            }
+              spacing: Style.space(8)
 
-            Dropdown {
-              width: parent.width
-              label: "RESOLUTION"
-              showLabel: true
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              value: root.selected ? Model.resolutionOf(root.selected.mode) : ""
-              options: root.selected ? Model.resolutionOptions(root.selected) : []
-              onChanged: function(v) { root.setResolution(v) }
-            }
+              Dropdown {
+                width: (parent.width - parent.spacing) / 2
+                label: "RESOLUTION"
+                showLabel: true
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                value: root.selected ? Model.resolutionOf(root.selected.mode) : ""
+                options: root.selected ? Model.resolutionOptions(root.selected) : []
+                onChanged: function(v) { root.setResolution(v) }
+              }
 
-            Dropdown {
-              width: parent.width
-              label: "REFRESH RATE"
-              showLabel: true
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              value: root.selected ? root.selected.mode : ""
-              options: root.selected ? Model.refreshOptions(root.selected) : []
-              onChanged: function(v) { root.setMode(v) }
+              Dropdown {
+                width: (parent.width - parent.spacing) / 2
+                label: "REFRESH RATE"
+                showLabel: true
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                value: root.selected ? root.selected.mode : ""
+                options: root.selected ? Model.refreshOptions(root.selected) : []
+                onChanged: function(v) { root.setMode(v) }
+              }
             }
 
             Column {
               width: parent.width
-              spacing: Style.space(6)
+              spacing: Style.space(4)
 
               PanelSectionHeader {
                 text: "SCALE"
@@ -751,48 +703,54 @@ Panel {
               }
             }
 
-            Dropdown {
+            Row {
               width: parent.width
-              label: "ORIENTATION"
-              showLabel: true
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              value: root.selected ? String(root.selected.transform) : "0"
-              options: root.rotateOptions
-              onChanged: function(v) { root.setTransform(v) }
+              spacing: Style.space(8)
+
+              Dropdown {
+                width: (parent.width - parent.spacing) / 2
+                label: "ORIENTATION"
+                showLabel: true
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                value: root.selected ? String(root.selected.transform) : "0"
+                options: root.rotateOptions
+                onChanged: function(v) { root.setTransform(v) }
+              }
+
+              Dropdown {
+                width: (parent.width - parent.spacing) / 2
+                label: "MIRROR"
+                showLabel: true
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                value: root.selected ? String(root.selected.mirror || "") : ""
+                options: Model.mirrorOptions(root.monitors, root.selected)
+                onChanged: function(v) { root.setMirror(v) }
+              }
             }
 
-            Dropdown {
+            Text {
+              visible: !root.selectedHdrOk && !root.selectedVrrOk
               width: parent.width
-              label: "MIRROR"
-              showLabel: true
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              value: root.selected ? String(root.selected.mirror || "") : ""
-              options: Model.mirrorOptions(root.monitors, root.selected)
-              onChanged: function(v) { root.setMirror(v) }
-            }
-
-            Dropdown {
-              width: parent.width
-              label: "VARIABLE REFRESH"
-              showLabel: true
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              value: root.selected ? String(root.selected.vrr) : "0"
-              options: root.vrrOptions
-              onChanged: function(v) { root.setVrr(v) }
+              text: "HDR / VRR unavailable for this display"
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
             }
 
             Row {
+              visible: root.selectedHdrOk || root.selectedVrrOk
               width: parent.width
-              spacing: Style.space(10)
+              spacing: Style.space(8)
 
               Toggle {
                 width: (parent.width - parent.spacing) / 2
                 label: "HDR"
-                description: root.selected && root.selected.hdrCapable ? "10-bit PQ" : "Not in EDID"
+                description: root.selectedHdrOk ? "10-bit PQ" : "Unavailable"
                 checked: !!(root.selected && root.selected.hdr)
+                enabled: root.selectedHdrOk
+                opacity: root.selectedHdrOk ? 1 : 0.4
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
                 onClicked: root.setHdr(!(root.selected && root.selected.hdr))
@@ -800,15 +758,41 @@ Panel {
 
               Toggle {
                 width: (parent.width - parent.spacing) / 2
-                label: "Enabled"
-                description: root.enabledCount <= 1 && root.selected && root.selected.enabled
-                  ? "Last screen"
-                  : "In the layout"
-                checked: !!(root.selected && root.selected.enabled)
+                label: "VRR"
+                description: root.selectedVrrOk ? "Adaptive-Sync" : "Unavailable"
+                checked: !!(root.selected && root.selected.vrr)
+                enabled: root.selectedVrrOk
+                opacity: root.selectedVrrOk ? 1 : 0.4
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
-                onClicked: root.setEnabled(!(root.selected && root.selected.enabled))
+                onClicked: root.setVrr(!(root.selected && root.selected.vrr))
               }
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Enable this Display"
+              description: root.enabledCount <= 1 && root.selected && root.selected.enabled
+                ? "Keep at least one screen on"
+                : "Include this panel in the layout"
+              checked: !!(root.selected && root.selected.enabled)
+              enabled: !(root.enabledCount <= 1 && root.selected && root.selected.enabled)
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              onClicked: root.setEnabled(!(root.selected && root.selected.enabled))
+            }
+
+            Button {
+              width: parent.width
+              text: root.selected && root.selected.identity === root.primaryId
+                ? "Primary display"
+                : "Make primary"
+              fontSize: Style.font.caption
+              fontFamily: root.bar.fontFamily
+              foreground: root.bar.foreground
+              bordered: true
+              active: !!(root.selected && root.selected.identity === root.primaryId)
+              onClicked: root.setPrimary()
             }
           }
 

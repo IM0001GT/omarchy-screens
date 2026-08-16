@@ -51,6 +51,29 @@ function indexByName(monitors, name) {
   return -1
 }
 
+function indexByIdentity(monitors, identity) {
+  for (var i = 0; i < monitors.length; i++) {
+    if (monitors[i].identity === identity) return i
+  }
+  return -1
+}
+
+function preferredIndex(monitors, barScreen, primary) {
+  var i
+  if (barScreen) {
+    i = indexByName(monitors, barScreen)
+    if (i >= 0) return i
+  }
+  if (primary) {
+    i = indexByIdentity(monitors, primary)
+    if (i >= 0) return i
+  }
+  for (i = 0; i < monitors.length; i++) {
+    if (monitors[i].focused) return i
+  }
+  return monitors.length ? 0 : -1
+}
+
 function logicalW(m) {
   return Math.max(1, Number(m.logicalW) || 1)
 }

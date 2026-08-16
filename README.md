@@ -46,7 +46,8 @@ cd omarchy-screens
 - **Drag** a tile — edges snap to neighboring screens
 - **Find** — flash a label so you know which rectangle is which
 - Pick a screen, then set **resolution**, **refresh**, **HDR**, **VRR**, **scale**, **orientation**, or **mirror**
-- **Save** a named profile (matched by make/model/serial, not `DP-4`). Turn on **Apply on connect** and unplugging the 1440p restores the TV-only desk
+- **Save** / **Desk** / **Auto** at the top — compact profile chips. Auto restores the matching desk on hotplug
+- Displays are labeled with Hyprland's model string. HDR / VRR disable themselves when the panel cannot do them
 - Changes write `~/.config/hypr/monitors.lua` and reload Hyprland (backups and profiles land in `~/.local/state/im0001gt.screens/`)
 
 Move it with `omarchy bar move im0001gt.screens`.
