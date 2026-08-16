@@ -34,7 +34,8 @@ Panel {
   property string matchProfile: ""
   property string connectedKey: ""
   property string lastKey: ""
-  property string profileName: "Desk"
+  property string profileName: ""
+  property bool namingProfile: false
   property string primaryId: ""
   property bool userPicked: false
 
@@ -96,7 +97,7 @@ Panel {
     root.autoSwitch = !data || data.autoSwitch !== false
     root.matchProfile = (data && data.match) ? String(data.match) : ""
     root.primaryId = (data && data.primary) ? String(data.primary) : ""
-    if (root.activeProfile) root.profileName = root.activeProfile
+    if (root.activeProfile && !root.namingProfile) root.profileName = root.activeProfile
     if (!root.userPicked) {
       var pick = Model.preferredIndex(list, root.barScreenName, root.primaryId)
       if (pick >= 0) root.selectedIndex = pick
@@ -183,10 +184,27 @@ Panel {
     storeProc.running = true
   }
 
+  function beginSave() {
+    root.namingProfile = true
+    if (!root.profileName) root.profileName = root.activeProfile
+    Qt.callLater(function() {
+      if (profileNameField) profileNameField.forceActiveFocus()
+    })
+  }
+
+  function cancelSave() {
+    root.namingProfile = false
+    if (root.activeProfile) root.profileName = root.activeProfile
+  }
+
   function saveProfile() {
     var name = String(root.profileName || "").trim()
-    if (!name) name = "Desk"
+    if (!name) {
+      root.beginSave()
+      return
+    }
     root.profileName = name
+    root.namingProfile = false
     var payload = JSON.stringify(Model.applyPayload(Model.normalizeOrigin(Model.clone(root.monitors))))
     root.runStore(["profile", "save", name, payload])
   }
@@ -395,72 +413,130 @@ Panel {
             }
           }
 
-          Row {
+          Column {
             width: parent.width
             spacing: Style.space(6)
 
-            Text {
-              anchors.verticalCenter: parent.verticalCenter
-              text: "PROFILE"
-              color: Qt.darker(root.bar.foreground, 1.4)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              font.letterSpacing: Style.font.caption * 0.1
-            }
+            Row {
+              width: parent.width
+              spacing: Style.space(6)
 
-            Repeater {
-              model: root.profiles
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "PROFILE"
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: Style.font.caption * 0.1
+              }
+
+              Dropdown {
+                visible: !root.namingProfile && root.profiles.length > 1
+                width: Style.space(168)
+                showLabel: false
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                value: root.activeProfile
+                options: Model.profileOptions(root.profiles)
+                onChanged: function(v) { if (v && v !== root.activeProfile) root.applyProfile(v) }
+              }
 
               Button {
-                required property var modelData
-                text: modelData.name
+                visible: !root.namingProfile && root.profiles.length === 1
+                text: root.activeProfile || root.profiles[0].name
                 fontSize: Style.font.caption
                 fontFamily: root.bar.fontFamily
                 foreground: root.bar.foreground
                 bordered: true
-                active: modelData.name === root.activeProfile
+                active: true
                 horizontalPadding: Style.space(10)
                 verticalPadding: Style.space(3)
-                onClicked: root.applyProfile(modelData.name)
+              }
+
+              Button {
+                visible: !root.namingProfile
+                text: "Save"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(3)
+                onClicked: root.beginSave()
+              }
+
+              Button {
+                visible: !root.namingProfile && root.profiles.length > 0
+                text: "Delete"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(3)
+                onClicked: root.deleteProfile()
+              }
+
+              Button {
+                visible: !root.namingProfile
+                text: root.autoSwitch ? "On connect" : "Manual"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                active: root.autoSwitch
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(3)
+                tooltipText: root.autoSwitch
+                  ? "On: restore the matching saved layout when a display is plugged in"
+                  : "Off: leave the layout alone when a display is plugged in"
+                onClicked: root.setAutoSwitch(!root.autoSwitch)
               }
             }
 
-            Button {
-              text: "Save"
-              fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
-              bordered: true
-              horizontalPadding: Style.space(10)
-              verticalPadding: Style.space(3)
-              onClicked: root.saveProfile()
-            }
+            Row {
+              visible: root.namingProfile
+              width: parent.width
+              spacing: Style.space(6)
 
-            Button {
-              text: "Auto"
-              fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
-              bordered: true
-              active: root.autoSwitch
-              horizontalPadding: Style.space(10)
-              verticalPadding: Style.space(3)
-              onClicked: root.setAutoSwitch(!root.autoSwitch)
-            }
+              TextField {
+                id: profileNameField
+                width: parent.width - saveConfirmBtn.width - saveCancelBtn.width - parent.spacing * 2
+                text: root.profileName
+                placeholderText: "Name this layout"
+                font.pixelSize: Style.font.body
+                foreground: root.bar.foreground
+                verticalPadding: Style.space(4)
+                onTextChanged: if (activeFocus) root.profileName = text
+                onAccepted: root.saveProfile()
+                Keys.onEscapePressed: root.cancelSave()
+              }
 
-            Button {
-              visible: root.profiles.length > 0
-              text: "Del"
-              fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
-              bordered: true
-              horizontalPadding: Style.space(10)
-              verticalPadding: Style.space(3)
-              onClicked: root.deleteProfile()
-            }
+              Button {
+                id: saveConfirmBtn
+                text: "Save"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(3)
+                onClicked: root.saveProfile()
+              }
 
+              Button {
+                id: saveCancelBtn
+                text: "Cancel"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(3)
+                onClicked: root.cancelSave()
+              }
+            }
           }
 
           PanelSeparator { foreground: root.bar.foreground }
