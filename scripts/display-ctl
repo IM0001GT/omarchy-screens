@@ -2,9 +2,13 @@
 """Read and apply Hyprland display layout for the Screens bar panel.
 
 Commands:
-  state              JSON snapshot of every monitor Hyprland knows
+  state              JSON snapshot of monitors + saved profiles
   apply <json>       write ~/.config/hypr/monitors.lua and reload
   identify [name]    flash a Hyprland notify for one or every screen
+  profile save <name> [json]   store a hardware-aware layout
+  profile delete <name>
+  profile apply <name>
+  profile auto 0|1
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import time
 
 MONITORS_LUA = os.path.expanduser("~/.config/hypr/monitors.lua")
 BACKUP_DIR = os.path.expanduser("~/.local/state/im0001gt.screens")
+PROFILES_PATH = os.path.join(BACKUP_DIR, "profiles.json")
 MANAGED_BEGIN = "-- BEGIN im0001gt.screens"
 MANAGED_END = "-- END im0001gt.screens"
 
@@ -256,7 +261,10 @@ def snapshot():
         # but still accept Adaptive-Sync / HDMI VRR from the compositor.
         if not vrr_cap and any(p["refresh"] >= 100 for p in modes):
             vrr_cap = True
-        monitors.append({
+        mirror = mon.get("mirrorOf") or ""
+        if mirror == "none":
+            mirror = ""
+        entry = {
             "name": name,
             "description": mon.get("description") or "",
             "make": mon.get("make") or "",
@@ -283,9 +291,26 @@ def snapshot():
             "resolutions": group_resolutions(modes),
             "physicalW": int(mon.get("physicalWidth") or 0),
             "physicalH": int(mon.get("physicalHeight") or 0),
-        })
+            "mirror": mirror,
+        }
+        entry["identity"] = monitor_identity(entry)
+        monitors.append(entry)
     monitors.sort(key=lambda m: (not m["enabled"], m["x"], m["y"], m["name"]))
-    return {"monitors": monitors}
+    store = load_store()
+    ids = [m["identity"] for m in monitors if m.get("identity")]
+    match = match_profile(store, ids)
+    return {
+        "monitors": monitors,
+        "profiles": [
+            {"name": p.get("name") or "", "count": len(p.get("monitors") or [])}
+            for p in store.get("profiles") or []
+            if p.get("name")
+        ],
+        "active": store.get("active") or "",
+        "autoSwitch": bool(store.get("autoSwitch", True)),
+        "match": match or "",
+        "connectedKey": "\n".join(sorted(ids)),
+    }
 
 
 def read_gdk_scale(text):
@@ -293,6 +318,83 @@ def read_gdk_scale(text):
     if m:
         return m.group(1)
     return "2"
+
+
+def clean_desc(text):
+    desc = (text or "").strip()
+    return re.sub(r"\s+\([^)]+\)$", "", desc)
+
+
+def monitor_identity(mon):
+    desc = clean_desc(mon.get("description") or mon.get("id") or "")
+    if desc.startswith("desc:"):
+        return desc
+    if desc:
+        return "desc:%s" % desc
+    return mon.get("name") or ""
+
+
+def connected_key(monitors):
+    return "\n".join(sorted({monitor_identity(m) for m in monitors if monitor_identity(m)}))
+
+
+def load_store():
+    store = {"active": "", "autoSwitch": True, "lastKey": "", "profiles": []}
+    try:
+        with open(PROFILES_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            store["active"] = str(data.get("active") or "")
+            store["autoSwitch"] = bool(data.get("autoSwitch", True))
+            store["lastKey"] = str(data.get("lastKey") or "")
+            profiles = data.get("profiles")
+            if isinstance(profiles, list):
+                store["profiles"] = profiles
+    except (OSError, json.JSONDecodeError):
+        pass
+    return store
+
+
+def save_store(store):
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    tmp = PROFILES_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(store, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, PROFILES_PATH)
+
+
+def find_profile(store, name):
+    for profile in store.get("profiles") or []:
+        if profile.get("name") == name:
+            return profile
+    return None
+
+
+def match_profile(store, identities):
+    ids = set(identities)
+    if not ids:
+        return ""
+    exact = ""
+    best = ""
+    best_score = 0
+    for profile in store.get("profiles") or []:
+        pids = {m.get("id") for m in profile.get("monitors") or [] if m.get("id")}
+        if not pids:
+            continue
+        if pids == ids:
+            exact = profile.get("name") or ""
+        elif pids <= ids and len(pids) > best_score:
+            best = profile.get("name") or ""
+            best_score = len(pids)
+    return exact or best
+
+
+def profile_rule(profile, identity):
+    for mon in profile.get("monitors") or []:
+        if mon.get("id") == identity:
+            return mon
+    return None
 
 
 def output_ref(mon, used_desc):
@@ -324,6 +426,9 @@ def monitor_lua(mon, used_desc):
         fields.append("bitdepth = 10")
         fields.append('cm = "hdr"')
         fields.append("supports_hdr = 1")
+    mirror = mon.get("mirror") or ""
+    if mirror and mirror not in ("none", name, mon.get("name")):
+        fields.append("mirror = %s" % lua_str(mirror))
     return "hl.monitor({ %s })" % ", ".join(fields)
 
 
@@ -434,6 +539,101 @@ def apply(payload):
     return 0
 
 
+def profile_entry_from_monitor(mon):
+    return {
+        "id": monitor_identity(mon),
+        "mode": mon.get("mode") or "preferred",
+        "x": int(mon.get("x") or 0),
+        "y": int(mon.get("y") or 0),
+        "scale": mon.get("scale") if mon.get("scale") not in (None, "") else 1,
+        "transform": int(mon.get("transform") or 0),
+        "vrr": int(mon.get("vrr") or 0),
+        "hdr": bool(mon.get("hdr")),
+        "enabled": bool(mon.get("enabled", True)),
+        "mirror": mon.get("mirror") or "",
+    }
+
+
+def merge_profile(profile, live):
+    by_id = {monitor_identity(m): m for m in live}
+    merged = []
+    for live_m in live:
+        rule = profile_rule(profile, live_m.get("identity") or monitor_identity(live_m))
+        if not rule:
+            merged.append(live_m)
+            continue
+        item = dict(live_m)
+        for key in ("mode", "x", "y", "scale", "transform", "vrr", "hdr", "enabled", "mirror"):
+            if key in rule:
+                item[key] = rule[key]
+        # Profile mirror is stored as identity; Hyprland wants a connector.
+        mirror = item.get("mirror") or ""
+        if mirror.startswith("desc:") and mirror in by_id:
+            item["mirror"] = by_id[mirror].get("name") or ""
+        elif mirror.startswith("desc:"):
+            for other in live:
+                if monitor_identity(other) == mirror:
+                    item["mirror"] = other.get("name") or ""
+                    break
+        merged.append(item)
+    return merged
+
+
+def save_profile(name, payload=None):
+    name = (name or "").strip()
+    if not name:
+        print("profile save: name required", file=sys.stderr)
+        return 2
+    if payload and payload.get("monitors"):
+        monitors = payload["monitors"]
+    else:
+        monitors = snapshot()["monitors"]
+    store = load_store()
+    entry = {
+        "name": name,
+        "monitors": [profile_entry_from_monitor(m) for m in monitors if monitor_identity(m)],
+    }
+    others = [p for p in store["profiles"] if p.get("name") != name]
+    store["profiles"] = others + [entry]
+    store["active"] = name
+    store["lastKey"] = connected_key(monitors)
+    save_store(store)
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
+
+
+def delete_profile(name):
+    store = load_store()
+    store["profiles"] = [p for p in store["profiles"] if p.get("name") != name]
+    if store.get("active") == name:
+        store["active"] = ""
+    save_store(store)
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
+
+
+def apply_profile(name):
+    store = load_store()
+    profile = find_profile(store, name)
+    if not profile:
+        print("profile apply: no such profile: %s" % name, file=sys.stderr)
+        return 2
+    live = snapshot()["monitors"]
+    merged = merge_profile(profile, live)
+    store["active"] = name
+    store["lastKey"] = connected_key(live)
+    save_store(store)
+    return apply({"monitors": merged})
+
+
+def set_auto(value):
+    store = load_store()
+    store["autoSwitch"] = str(value).strip() not in ("0", "false", "off", "no")
+    save_store(store)
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
+
+
 def identify(name=None):
     data = snapshot()
     targets = data["monitors"]
@@ -465,6 +665,23 @@ def main(argv):
         return apply(payload)
     if cmd == "identify":
         return identify(argv[1] if len(argv) > 1 else None)
+    if cmd == "profile":
+        if len(argv) < 2:
+            print("profile: save|delete|apply|auto", file=sys.stderr)
+            return 2
+        action = argv[1]
+        if action == "save":
+            raw = argv[3] if len(argv) > 3 else None
+            payload = json.loads(raw) if raw else None
+            return save_profile(argv[2] if len(argv) > 2 else "", payload)
+        if action == "delete":
+            return delete_profile(argv[2] if len(argv) > 2 else "")
+        if action == "apply":
+            return apply_profile(argv[2] if len(argv) > 2 else "")
+        if action == "auto":
+            return set_auto(argv[2] if len(argv) > 2 else "1")
+        print("profile: unknown action: %s" % action, file=sys.stderr)
+        return 2
     print("unknown command: %s" % cmd, file=sys.stderr)
     return 2
 

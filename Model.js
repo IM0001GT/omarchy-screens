@@ -28,7 +28,9 @@ function clone(monitors) {
       mode: m.mode,
       resolutions: m.resolutions,
       physicalW: m.physicalW,
-      physicalH: m.physicalH
+      physicalH: m.physicalH,
+      identity: m.identity,
+      mirror: m.mirror || ""
     })
   }
   return out
@@ -199,7 +201,10 @@ function applyPayload(monitors) {
       transform: m.transform,
       vrr: m.vrr,
       hdr: !!m.hdr,
-      enabled: !!m.enabled
+      enabled: !!m.enabled,
+      identity: m.identity,
+      description: m.description,
+      mirror: m.mirror || ""
     })
   }
   return { monitors: out }
@@ -253,9 +258,10 @@ function pickMode(mon, resolution, preferHz) {
   return best.id
 }
 
-function heroStatus(mon) {
+function heroStatus(mon, profileName) {
   if (!mon) return "No displays"
   var bits = []
+  if (profileName) bits.push(profileName)
   var res = resolutionOf(mon.mode)
   if (res) bits.push(res.replace("x", "×"))
   var hz = Number(mon.refresh)
@@ -263,6 +269,33 @@ function heroStatus(mon) {
   if (mon.hdr) bits.push("HDR")
   if (mon.vrr) bits.push("VRR")
   return bits.length ? bits.join(" · ") : (mon.label || mon.name)
+}
+
+function mirrorOptions(monitors, selected) {
+  var out = [{ value: "", label: "Off" }]
+  if (!monitors) return out
+  for (var i = 0; i < monitors.length; i++) {
+    var m = monitors[i]
+    if (!m || !m.enabled) continue
+    if (selected && m.name === selected.name) continue
+    out.push({ value: m.name, label: m.label || m.name })
+  }
+  return out
+}
+
+function profileOptions(profiles) {
+  var out = []
+  if (!profiles) return out
+  for (var i = 0; i < profiles.length; i++) {
+    var p = profiles[i]
+    if (!p || !p.name) continue
+    var n = Number(p.count) || 0
+    out.push({
+      value: p.name,
+      label: n > 0 ? (p.name + " · " + n + (n === 1 ? " screen" : " screens")) : p.name
+    })
+  }
+  return out
 }
 
 if (typeof module !== "undefined") {

@@ -26,6 +26,13 @@ Panel {
   property var guideX: null
   property var guideY: null
   property bool identifying: false
+  property var profiles: []
+  property string activeProfile: ""
+  property bool autoSwitch: true
+  property string matchProfile: ""
+  property string connectedKey: ""
+  property string lastKey: ""
+  property string profileName: "Desk"
 
   readonly property var selected: {
     if (selectedIndex < 0 || selectedIndex >= monitors.length) return null
@@ -56,11 +63,24 @@ Panel {
   function adopt(data) {
     var list = (data && data.monitors) ? Model.clone(data.monitors) : []
     root.monitors = list
+    root.profiles = (data && data.profiles) ? data.profiles : []
+    root.activeProfile = (data && data.active) ? String(data.active) : ""
+    root.autoSwitch = !data || data.autoSwitch !== false
+    root.matchProfile = (data && data.match) ? String(data.match) : ""
+    if (root.activeProfile && !(profileNameField && profileNameField.activeFocus))
+      root.profileName = root.activeProfile
     if (root.selectedIndex >= list.length) root.selectedIndex = Math.max(0, list.length - 1)
     if (list.length && (root.selectedIndex < 0 || !list[root.selectedIndex])) {
       for (var i = 0; i < list.length; i++) {
         if (list[i].focused) { root.selectedIndex = i; break }
       }
+    }
+    var key = (data && data.connectedKey) ? String(data.connectedKey) : ""
+    var prev = root.lastKey
+    if (key) root.lastKey = key
+    if (prev !== "" && key !== "" && prev !== key && root.autoSwitch && root.matchProfile
+        && !root.opened && !root.dragging && !root.applying) {
+      root.applyProfile(root.matchProfile)
     }
   }
 
@@ -120,6 +140,44 @@ Panel {
     mutateSelected(function(m) { m.enabled = !!on })
   }
 
+  function setMirror(name) {
+    mutateSelected(function(m) { m.mirror = name || "" })
+  }
+
+  function runStore(args) {
+    if (storeProc.running) return
+    storeProc.command = [root.ctl].concat(args)
+    storeProc.running = true
+  }
+
+  function saveProfile() {
+    var name = String(root.profileName || "").trim()
+    if (!name) name = "Desk"
+    root.profileName = name
+    var payload = JSON.stringify(Model.applyPayload(Model.normalizeOrigin(Model.clone(root.monitors))))
+    root.runStore(["profile", "save", name, payload])
+  }
+
+  function deleteProfile() {
+    var name = String(root.profileName || root.activeProfile || "").trim()
+    if (!name) return
+    root.runStore(["profile", "delete", name])
+  }
+
+  function applyProfile(name) {
+    if (!name) return
+    root.profileName = name
+    if (applyProc.running) return
+    applyProc.command = [root.ctl, "profile", "apply", name]
+    root.applying = true
+    applyProc.running = true
+  }
+
+  function setAutoSwitch(on) {
+    root.autoSwitch = !!on
+    root.runStore(["profile", "auto", on ? "1" : "0"])
+  }
+
   function identify() {
     root.identifying = true
     identifyTimer.restart()
@@ -136,8 +194,8 @@ Panel {
   onOpenedChanged: if (opened) refresh()
 
   Timer {
-    interval: 4000
-    running: root.opened && !root.dragging && !root.applying
+    interval: root.opened ? 4000 : 2000
+    running: !root.dragging && !root.applying
     repeat: true
     onTriggered: root.refresh()
   }
@@ -182,6 +240,17 @@ Panel {
   Process {
     id: identifyProc
     stdout: StdioCollector { waitForEnd: true }
+  }
+
+  Process {
+    id: storeProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try { root.adopt(JSON.parse(text)) }
+        catch (e) { root.refresh() }
+      }
+    }
   }
 
   BarIconButton {
@@ -265,7 +334,7 @@ Panel {
               }
 
               Text {
-                text: (root.dragging ? "Snapping edges" : Model.heroStatus(root.selected)).toUpperCase()
+                text: (root.dragging ? "Snapping edges" : Model.heroStatus(root.selected, root.activeProfile)).toUpperCase()
                 color: Qt.darker(root.bar.foreground, 1.4)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
@@ -486,6 +555,107 @@ Panel {
 
           Column {
             width: parent.width
+            spacing: Style.space(8)
+
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(profileHeader.implicitHeight, profileHint.implicitHeight)
+
+              PanelSectionHeader {
+                id: profileHeader
+                text: "PROFILE"
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Text {
+                id: profileHint
+                text: root.matchProfile !== "" ? ("match · " + root.matchProfile) : (root.profiles.length + " saved")
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+              }
+            }
+
+            Dropdown {
+              width: parent.width
+              label: "SAVED LAYOUTS"
+              showLabel: false
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              value: root.activeProfile
+              options: Model.profileOptions(root.profiles)
+              onChanged: function(v) { if (v && v !== root.activeProfile) root.applyProfile(v) }
+            }
+
+            TextField {
+              id: profileNameField
+              width: parent.width
+              text: root.profileName
+              placeholderText: "Desk"
+              font.pixelSize: Style.font.body
+              foreground: root.bar.foreground
+              onEditingFinished: root.profileName = text
+              onAccepted: root.saveProfile()
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              Button {
+                width: (parent.width - parent.spacing * 2) / 3
+                text: "Save"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                onClicked: root.saveProfile()
+              }
+
+              Button {
+                width: (parent.width - parent.spacing * 2) / 3
+                text: "Apply"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                enabled: root.profileName !== ""
+                onClicked: root.applyProfile(root.profileName)
+              }
+
+              Button {
+                width: (parent.width - parent.spacing * 2) / 3
+                text: "Delete"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                enabled: root.profiles.length > 0
+                onClicked: root.deleteProfile()
+              }
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Apply on connect"
+              description: "Restore the matching profile when a display is plugged in"
+              checked: root.autoSwitch
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              onClicked: root.setAutoSwitch(!root.autoSwitch)
+            }
+          }
+
+          PanelSeparator { foreground: root.bar.foreground }
+
+          Column {
+            width: parent.width
             spacing: Style.space(10)
             visible: root.selected !== null
 
@@ -590,6 +760,17 @@ Panel {
               value: root.selected ? String(root.selected.transform) : "0"
               options: root.rotateOptions
               onChanged: function(v) { root.setTransform(v) }
+            }
+
+            Dropdown {
+              width: parent.width
+              label: "MIRROR"
+              showLabel: true
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              value: root.selected ? String(root.selected.mirror || "") : ""
+              options: Model.mirrorOptions(root.monitors, root.selected)
+              onChanged: function(v) { root.setMirror(v) }
             }
 
             Dropdown {

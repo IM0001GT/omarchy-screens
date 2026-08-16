@@ -2,21 +2,21 @@
 
 An Omarchy bar widget for multi-monitor desks.
 
-Click the quilt icon for a Power-style panel that stays open. Displays are drawn at their real layout size. Drag them and they **snap flush** — no overlapping tiles, no mystery gaps that eat the cursor. Then set refresh, HDR, VRR, scale, and rotation on the selected screen.
+Click the two-tile icon for a Power-style panel that stays open. Displays are drawn at their real layout size. Drag them and they **snap flush** — no overlapping tiles, no mystery gaps that eat the cursor. Then set refresh, HDR, VRR, scale, rotation, and mirroring on the selected screen. Save the whole desk as a **profile**; Screens can restore it when a display is plugged in.
 
 The stock **Display** widget stays where it is (brightness, text size). Screens uses a two-tile mark so the two icons never collide.
 
-| Click | Drag | Per screen |
-| --- | --- | --- |
-| Open the panel | Snap tiles to each other's edges | Resolution, Hz, HDR, VRR, scale, rotation, on/off |
+| Click | Drag | Per screen | Profiles |
+| --- | --- | --- | --- |
+| Open the panel | Snap tiles to each other's edges | Resolution, Hz, HDR, VRR, scale, rotation, mirror, on/off | Save a desk, restore it on hotplug |
 
 Works with two screens or a full battlestation. A fallback Hyprland rule still catches anything you hot-plug later.
 
 ## Why this exists
 
-Omarchy's built-in Display panel does not arrange monitors or expose HDMI 2.1 features. Other marketplace layout tools reuse the same monitor glyph, draw tiles at the wrong size, and let you drop them with gaps or overlaps.
+Omarchy's built-in Display panel does not arrange monitors or expose HDMI 2.1 features. Other marketplace tools either reuse the stock monitor glyph and skip snap, or wrap an external TUI (hyprmoncfg) so the bar only launches a daemon.
 
-Screens is the other thing: a themed click panel whose canvas is the actual Hyprland layout.
+Screens keeps the editor in the panel: snap, Hz, HDR, VRR, and named profiles that follow make/model/serial when a display is plugged in. No AUR package, no extra daemon.
 
 ## Install
 
@@ -41,8 +41,9 @@ cd omarchy-screens
 - **Click** the two-tile icon — panel stays open until you click away
 - **Drag** a tile — edges snap to neighboring screens
 - **Find** — flash a label so you know which rectangle is which
-- Pick a screen, then set **resolution**, **refresh**, **HDR**, **VRR**, **scale**, or **orientation**
-- Changes write `~/.config/hypr/monitors.lua` and reload Hyprland (backups land in `~/.local/state/im0001gt.screens/`)
+- Pick a screen, then set **resolution**, **refresh**, **HDR**, **VRR**, **scale**, **orientation**, or **mirror**
+- **Save** a named profile (matched by make/model/serial, not `DP-4`). Turn on **Apply on connect** and unplugging the 1440p restores the TV-only desk
+- Changes write `~/.config/hypr/monitors.lua` and reload Hyprland (backups and profiles land in `~/.local/state/im0001gt.screens/`)
 
 Move it with `omarchy bar move im0001gt.screens`.
 

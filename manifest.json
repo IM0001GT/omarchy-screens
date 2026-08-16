@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "id": "im0001gt.screens",
   "name": "Screens",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "IM0001GT",
   "license": "MIT",
   "homepage": "https://github.com/IM0001GT/omarchy-screens",
-  "description": "Arrange displays with snap-to-edge layout, then set refresh, HDR, VRR, scale, and rotation per screen",
+  "description": "Snap-to-edge monitor layout with HDR, VRR, refresh, and hardware-aware profiles that apply on hotplug",
   "kinds": [
     "bar-widget"
   ],
