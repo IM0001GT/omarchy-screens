@@ -1,0 +1,473 @@
+#!/usr/bin/env python3
+"""Read and apply Hyprland display layout for the Screens bar panel.
+
+Commands:
+  state              JSON snapshot of every monitor Hyprland knows
+  apply <json>       write ~/.config/hypr/monitors.lua and reload
+  identify [name]    flash a Hyprland notify for one or every screen
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+MONITORS_LUA = os.path.expanduser("~/.config/hypr/monitors.lua")
+BACKUP_DIR = os.path.expanduser("~/.local/state/im0001gt.screens")
+MANAGED_BEGIN = "-- BEGIN im0001gt.screens"
+MANAGED_END = "-- END im0001gt.screens"
+
+
+def run(cmd, timeout=4):
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def hypr_json(args):
+    out = run(["hyprctl", "-j", *args])
+    if not out or out.returncode != 0 or not (out.stdout or "").strip():
+        return None
+    try:
+        return json.loads(out.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def lua_str(value):
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def refresh_label(hz):
+    try:
+        hz = float(hz)
+    except (TypeError, ValueError):
+        return ""
+    nearest = round(hz)
+    if abs(hz - nearest) < 0.05:
+        return "%d Hz" % nearest
+    return ("%.2f" % hz).rstrip("0").rstrip(".") + " Hz"
+
+
+def parse_mode(raw):
+    text = str(raw or "").strip()
+    text = re.sub(r"Hz$", "", text, flags=re.I)
+    m = re.match(r"(\d+)x(\d+)@([\d.]+)$", text)
+    if not m:
+        return None
+    w, h, hz = int(m.group(1)), int(m.group(2)), float(m.group(3))
+    return {
+        "id": "%dx%d@%s" % (w, h, m.group(3)),
+        "width": w,
+        "height": h,
+        "refresh": hz,
+        "resolution": "%dx%d" % (w, h),
+        "label": "%d × %d" % (w, h),
+        "refreshLabel": refresh_label(hz),
+    }
+
+
+def logical_size(width, height, scale, transform):
+    try:
+        scale = float(scale) if scale else 1.0
+    except (TypeError, ValueError):
+        scale = 1.0
+    if scale <= 0:
+        scale = 1.0
+    w = int(round(float(width or 0) / scale))
+    h = int(round(float(height or 0) / scale))
+    if int(transform or 0) in (1, 3, 5, 7):
+        w, h = h, w
+    return max(1, w), max(1, h)
+
+
+def short_make(make):
+    text = (make or "").strip()
+    text = re.sub(r"\s*,?\s*(Corporation|Inc\.?|Ltd\.?|Limited|CO\.?|Electronics)\b\.?", "", text, flags=re.I)
+    text = re.sub(r"[\s,]+", " ", text).strip(" .,")
+    return text or "Display"
+
+
+def friendly_label(mon):
+    make = short_make(mon.get("make"))
+    model = re.sub(r"\s+", " ", (mon.get("model") or "")).strip()
+    blob = " ".join([mon.get("model") or "", mon.get("description") or ""])
+    if re.search(r"SSCR2|LG TV", blob, re.I):
+        return "LG OLED"
+    if re.search(r"dual-?dvi|unknown|^$", model, re.I):
+        return make if make != "Display" else mon.get("name") or "Display"
+    if make and make.lower() not in model.lower():
+        return ("%s %s" % (make, model)).strip()
+    return model or mon.get("name") or "Display"
+
+
+def drm_edid_path(name):
+    matches = sorted(glob.glob("/sys/class/drm/card*-%s/edid" % name))
+    return matches[0] if matches else None
+
+
+def edid_caps(name):
+    path = drm_edid_path(name)
+    hdr = False
+    vrr = False
+    if not path:
+        return hdr, vrr
+    try:
+        data = open(path, "rb").read()
+    except OSError:
+        return hdr, vrr
+    if len(data) < 128:
+        return hdr, vrr
+
+    def walk(block):
+        nonlocal hdr, vrr
+        if len(block) < 5 or block[0] != 0x02:
+            return
+        dtd = block[2]
+        i = 4
+        end = min(dtd if dtd >= 4 else len(block), len(block))
+        while i < end:
+            header = block[i]
+            if header == 0:
+                break
+            tag = header >> 5
+            length = header & 0x1F
+            payload = block[i + 1 : i + 1 + length]
+            i += 1 + length
+            if tag == 7 and payload:
+                ext = payload[0]
+                # 6 = HDR static metadata, 7 = HDR dynamic metadata
+                if ext in (6, 7):
+                    hdr = True
+                # 14 = HDMI Forum SCDB (VRR), 1 = video capability
+                if ext == 0x0E:
+                    vrr = True
+            if tag == 3 and len(payload) >= 3:
+                oui = (payload[0] << 16) | (payload[1] << 8) | payload[2]
+                # HDMI Licensing, HDMI Forum, AMD, VESA
+                if oui in (0x000C03, 0xC45DD8, 0x00001A, 0x3A0292):
+                    blob = payload.lower() if False else payload
+                    if b"freesync" in data.lower() or oui in (0x00001A, 0xC45DD8):
+                        vrr = True
+
+    walk(data[128:256] if len(data) >= 256 else b"")
+    if len(data) >= 384:
+        walk(data[256:384])
+    if len(data) >= 512:
+        walk(data[384:512])
+    if b"freesync" in data.lower() or b"adaptive-sync" in data.lower():
+        vrr = True
+    return hdr, vrr
+
+
+def current_mode_id(mon):
+    w = int(mon.get("width") or 0)
+    h = int(mon.get("height") or 0)
+    hz = float(mon.get("refreshRate") or 0)
+    if w <= 0 or h <= 0:
+        return ""
+    modes = []
+    for raw in mon.get("availableModes") or []:
+        parsed = parse_mode(raw)
+        if parsed and parsed["width"] == w and parsed["height"] == h:
+            modes.append(parsed)
+    if not modes:
+        return "%dx%d@%s" % (w, h, ("%g" % hz) if hz else "60")
+    best = min(modes, key=lambda p: abs(p["refresh"] - hz))
+    return best["id"]
+
+
+def vrr_mode(mon):
+    raw = mon.get("vrr")
+    if raw is True:
+        return 1
+    if raw is False or raw is None:
+        return 0
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
+def is_hdr(mon):
+    cm = str(mon.get("colorManagementPreset") or "").lower()
+    fmt = str(mon.get("currentFormat") or "").upper()
+    if cm in ("hdr", "hdredid"):
+        return True
+    if any(tok in fmt for tok in ("2101010", "101010", "P010", "P012")):
+        return True
+    return False
+
+
+def group_resolutions(modes):
+    grouped = []
+    index = {}
+    for mode in modes:
+        key = mode["resolution"]
+        if key not in index:
+            index[key] = {
+                "id": key,
+                "label": mode["label"],
+                "width": mode["width"],
+                "height": mode["height"],
+                "refreshes": [],
+            }
+            grouped.append(index[key])
+        refresh = {
+            "id": mode["id"],
+            "refresh": mode["refresh"],
+            "label": mode["refreshLabel"],
+        }
+        if all(r["id"] != refresh["id"] for r in index[key]["refreshes"]):
+            index[key]["refreshes"].append(refresh)
+    for item in grouped:
+        item["refreshes"].sort(key=lambda r: -r["refresh"])
+    grouped.sort(key=lambda r: (-r["width"], -r["height"]))
+    return grouped
+
+
+def snapshot():
+    raw = hypr_json(["monitors", "all"]) or []
+    monitors = []
+    for mon in raw:
+        name = mon.get("name") or ""
+        modes = [p for p in (parse_mode(x) for x in mon.get("availableModes") or []) if p]
+        scale = mon.get("scale") or 1
+        transform = int(mon.get("transform") or 0)
+        width = int(mon.get("width") or 0)
+        height = int(mon.get("height") or 0)
+        lw, lh = logical_size(width, height, scale, transform)
+        hdr_cap, vrr_cap = edid_caps(name)
+        hdr_on = is_hdr(mon)
+        if hdr_on:
+            hdr_cap = True
+        if vrr_mode(mon):
+            vrr_cap = True
+        # HDMI 2.1 sets and high-refresh DP panels often omit VRR in EDID
+        # but still accept Adaptive-Sync / HDMI VRR from the compositor.
+        if not vrr_cap and any(p["refresh"] >= 100 for p in modes):
+            vrr_cap = True
+        monitors.append({
+            "name": name,
+            "description": mon.get("description") or "",
+            "make": mon.get("make") or "",
+            "model": mon.get("model") or "",
+            "label": friendly_label(mon),
+            "enabled": not bool(mon.get("disabled")),
+            "focused": bool(mon.get("focused")),
+            "width": width,
+            "height": height,
+            "refresh": float(mon.get("refreshRate") or 0),
+            "x": int(mon.get("x") or 0),
+            "y": int(mon.get("y") or 0),
+            "scale": float(scale),
+            "transform": transform,
+            "vrr": vrr_mode(mon),
+            "cm": mon.get("colorManagementPreset") or "srgb",
+            "format": mon.get("currentFormat") or "",
+            "hdr": hdr_on,
+            "hdrCapable": hdr_cap,
+            "vrrCapable": vrr_cap,
+            "logicalW": lw,
+            "logicalH": lh,
+            "mode": current_mode_id(mon),
+            "resolutions": group_resolutions(modes),
+            "physicalW": int(mon.get("physicalWidth") or 0),
+            "physicalH": int(mon.get("physicalHeight") or 0),
+        })
+    monitors.sort(key=lambda m: (not m["enabled"], m["x"], m["y"], m["name"]))
+    return {"monitors": monitors}
+
+
+def read_gdk_scale(text):
+    m = re.search(r"omarchy_gdk_scale\s*=\s*([0-9.]+)", text or "")
+    if m:
+        return m.group(1)
+    return "2"
+
+
+def output_ref(mon, used_desc):
+    desc = (mon.get("description") or "").strip()
+    desc = re.sub(r"\s+\([^)]+\)$", "", desc)
+    if desc and desc not in used_desc:
+        used_desc.add(desc)
+        return "desc:%s" % desc
+    return mon.get("name") or ""
+
+
+def monitor_lua(mon, used_desc):
+    name = output_ref(mon, used_desc)
+    if not mon.get("enabled", True):
+        return "hl.monitor({ output = %s, disabled = true })" % lua_str(name)
+    fields = [
+        "output = %s" % lua_str(name),
+        "mode = %s" % lua_str(mon.get("mode") or "preferred"),
+        "position = %s" % lua_str("%dx%d" % (int(mon.get("x") or 0), int(mon.get("y") or 0))),
+        "scale = %s" % (mon.get("scale") if mon.get("scale") not in (None, "") else 1),
+    ]
+    transform = int(mon.get("transform") or 0)
+    if transform:
+        fields.append("transform = %d" % transform)
+    vrr = int(mon.get("vrr") or 0)
+    if vrr:
+        fields.append("vrr = %d" % vrr)
+    if mon.get("hdr"):
+        fields.append("bitdepth = 10")
+        fields.append('cm = "hdr"')
+        fields.append("supports_hdr = 1")
+    return "hl.monitor({ %s })" % ", ".join(fields)
+
+
+def render_lua(monitors, gdk_scale):
+    used = set()
+    lines = [
+        "-- See https://wiki.hypr.land/Configuring/Basics/Monitors/",
+        "-- Managed by im0001gt.screens (Screens bar panel).",
+        "",
+        "local omarchy_gdk_scale = %s" % gdk_scale,
+        'hl.env("GDK_SCALE", tostring(omarchy_gdk_scale))',
+        "",
+        MANAGED_BEGIN,
+    ]
+    for mon in monitors:
+        if mon.get("name") or mon.get("description"):
+            lines.append(monitor_lua(mon, used))
+    lines.append('hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })')
+    lines.append(MANAGED_END)
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def backup_file(path):
+    if not os.path.isfile(path):
+        return
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(BACKUP_DIR, "monitors.lua.%s" % stamp)
+    shutil.copy2(path, dest)
+    old = sorted(glob.glob(os.path.join(BACKUP_DIR, "monitors.lua.*")))
+    for extra in old[:-8]:
+        try:
+            os.unlink(extra)
+        except OSError:
+            pass
+
+
+def splice_managed(existing, block):
+    if MANAGED_BEGIN in existing and MANAGED_END in existing:
+        pre = existing.split(MANAGED_BEGIN, 1)[0].rstrip()
+        post = existing.split(MANAGED_END, 1)[1].lstrip("\n")
+        return (pre + "\n\n" + block.strip() + "\n" + (post if post.startswith("\n") else "\n" + post)).rstrip() + "\n"
+    return None
+
+
+def write_monitors_lua(monitors):
+    existing = ""
+    if os.path.isfile(MONITORS_LUA):
+        with open(MONITORS_LUA, encoding="utf-8") as fh:
+            existing = fh.read()
+    gdk = read_gdk_scale(existing)
+    used = set()
+    inner = [MANAGED_BEGIN]
+    for mon in monitors:
+        if mon.get("name") or mon.get("description"):
+            inner.append(monitor_lua(mon, used))
+    inner.append('hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })')
+    inner.append(MANAGED_END)
+    block = "\n".join(inner) + "\n"
+    spliced = splice_managed(existing, block)
+    text = spliced if spliced is not None else render_lua(monitors, gdk)
+    backup_file(MONITORS_LUA)
+    os.makedirs(os.path.dirname(MONITORS_LUA), exist_ok=True)
+    tmp = MONITORS_LUA + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.replace(tmp, MONITORS_LUA)
+    return text
+
+
+def config_errors():
+    out = run(["hyprctl", "configerrors"])
+    if not out:
+        return ""
+    return (out.stdout or "").strip()
+
+
+def reload_hypr():
+    run(["hyprctl", "reload"])
+    time.sleep(0.15)
+
+
+def apply(payload):
+    monitors = payload.get("monitors") if isinstance(payload, dict) else None
+    if not isinstance(monitors, list) or not monitors:
+        print("apply: expected {\"monitors\": [...]}", file=sys.stderr)
+        return 2
+    enabled = [m for m in monitors if m.get("enabled", True)]
+    if not enabled:
+        print("apply: refusing to disable every display", file=sys.stderr)
+        return 2
+    prev = ""
+    if os.path.isfile(MONITORS_LUA):
+        with open(MONITORS_LUA, encoding="utf-8") as fh:
+            prev = fh.read()
+    write_monitors_lua(monitors)
+    reload_hypr()
+    errors = config_errors()
+    if errors:
+        if prev:
+            with open(MONITORS_LUA, "w", encoding="utf-8") as fh:
+                fh.write(prev)
+            reload_hypr()
+        print(errors, file=sys.stderr)
+        return 1
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
+
+
+def identify(name=None):
+    data = snapshot()
+    targets = data["monitors"]
+    if name:
+        targets = [m for m in targets if m["name"] == name]
+    if not targets:
+        return 1
+    for i, mon in enumerate(targets, start=1):
+        label = "%d  %s  %s" % (i, mon["name"], mon["label"])
+        run(["hyprctl", "notify", "-1", "2200", "0", "fontsize:22 %s" % label])
+    return 0
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0
+    cmd = argv[0]
+    if cmd == "state":
+        print(json.dumps(snapshot(), separators=(",", ":")))
+        return 0
+    if cmd == "apply":
+        raw = argv[1] if len(argv) > 1 else sys.stdin.read()
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            print("apply: bad json: %s" % exc, file=sys.stderr)
+            return 2
+        return apply(payload)
+    if cmd == "identify":
+        return identify(argv[1] if len(argv) > 1 else None)
+    print("unknown command: %s" % cmd, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

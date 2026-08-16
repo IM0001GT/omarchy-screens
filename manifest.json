@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "im0001gt.screens",
+  "name": "Screens",
+  "version": "1.0.0",
+  "author": "IM0001GT",
+  "license": "MIT",
+  "homepage": "https://github.com/IM0001GT/omarchy-screens",
+  "description": "Arrange displays with snap-to-edge layout, then set refresh, HDR, VRR, scale, and rotation per screen",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Screens.qml"
+  },
+  "barWidget": {
+    "displayName": "Screens",
+    "description": "Click to arrange monitors and set refresh, HDR, and VRR. Tiles snap flush so the cursor matches your desk.",
+    "category": "Hardware",
+    "defaultSection": "right",
+    "allowMultiple": false
+  }
+}
