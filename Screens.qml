@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 import qs.Ui
 import qs.Commons
 import "Model.js" as Model
@@ -73,6 +74,15 @@ Panel {
   }
   readonly property bool selectedHdrOk: !!(selected && selected.hdrCapable)
   readonly property bool selectedVrrOk: !!(selected && selected.vrrCapable)
+  readonly property var identifyScreen: {
+    var name = selected ? selected.name : ""
+    var screens = Quickshell.screens
+    if (!name || !screens) return null
+    for (var i = 0; i < screens.length; i++) {
+      if (String(screens[i].name) === name) return screens[i]
+    }
+    return null
+  }
 
   function refresh() {
     if (!stateProc.running) stateProc.running = true
@@ -208,12 +218,9 @@ Panel {
   }
 
   function identify() {
+    if (!root.selected) return
     root.identifying = true
     identifyTimer.restart()
-    identifyProc.command = root.selected
-      ? [root.ctl, "identify", root.selected.name]
-      : [root.ctl, "identify"]
-    if (!identifyProc.running) identifyProc.running = true
   }
 
   implicitWidth: button.implicitWidth
@@ -281,11 +288,6 @@ Panel {
   }
 
   Process {
-    id: identifyProc
-    stdout: StdioCollector { waitForEnd: true }
-  }
-
-  Process {
     id: storeProc
     stdout: StdioCollector {
       waitForEnd: true
@@ -319,7 +321,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(480))
-    contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight, Style.space(720))
+    contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -327,22 +329,12 @@ Panel {
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
-      ScrollView {
-        id: scrollArea
-        anchors.fill: parent
-        clip: true
-        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-        ScrollBar.vertical.policy: panelColumn.implicitHeight > height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
-        Binding {
-          target: scrollArea.contentItem
-          property: "interactive"
-          value: panelColumn.implicitHeight > scrollArea.height
-        }
-
-        Column {
-          id: panelColumn
-          width: scrollArea.availableWidth
-          spacing: Style.space(10)
+      Column {
+        id: panelColumn
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        spacing: Style.space(10)
 
           Item {
             width: parent.width
@@ -816,7 +808,60 @@ Panel {
             }
           }
 
-          Item { width: parent.width; height: Style.space(12) }
+          Item { width: parent.width; height: Style.space(8) }
+        }
+      }
+    }
+
+  PanelWindow {
+    id: identWin
+    visible: root.identifying && !!root.identifyScreen
+    screen: root.identifyScreen || (Quickshell.screens.length ? Quickshell.screens[0] : null)
+    color: "transparent"
+    anchors { top: true; bottom: true; left: true; right: true }
+    exclusionMode: ExclusionMode.Ignore
+    mask: Region {}
+    WlrLayershell.namespace: "im0001gt.screens-identify"
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+
+    BorderSurface {
+      anchors.centerIn: parent
+      implicitWidth: identCol.implicitWidth + Style.space(48)
+      implicitHeight: identCol.implicitHeight + Style.space(36)
+      color: Color.popups.background
+      borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+      radius: Style.cornerRadius
+
+      Column {
+        id: identCol
+        anchors.centerIn: parent
+        spacing: Style.space(6)
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: String(root.selectedIndex + 1)
+          color: root.bar ? root.bar.foreground : Color.foreground
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.displayLarge
+          font.bold: true
+        }
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: root.selected ? root.selected.label : ""
+          color: root.bar ? root.bar.foreground : Color.foreground
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.title
+          font.bold: true
+        }
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: root.selected ? root.selected.name : ""
+          color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.4)
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.body
         }
       }
     }
