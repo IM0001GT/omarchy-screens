@@ -53,6 +53,14 @@ Panel {
     { value: "2", label: "Upside down" },
     { value: "3", label: "Portrait 270°" }
   ]
+  // Hyprland misc.vrr / per-output vrr: 0 off, 1 on, 2 fullscreen,
+  // 3 fullscreen when the content type is video or game.
+  readonly property var vrrOptions: [
+    { value: "0", label: "Off" },
+    { value: "1", label: "Always" },
+    { value: "2", label: "Fullscreen" },
+    { value: "3", label: "Games & video" }
+  ]
   readonly property string barScreenName: {
     var win = button.QsWindow ? button.QsWindow.window : null
     return (win && win.screen) ? String(win.screen.name) : ""
@@ -137,9 +145,12 @@ Panel {
     mutateSelected(function(m) { m.transform = parseInt(value, 10) || 0 })
   }
 
-  function setVrr(on) {
+  function setVrr(value) {
     if (!root.selectedVrrOk) return
-    mutateSelected(function(m) { m.vrr = on ? 1 : 0 })
+    var n = parseInt(value, 10)
+    if (!isFinite(n) || n < 0) n = 0
+    if (n > 3) n = 3
+    mutateSelected(function(m) { m.vrr = n })
   }
 
   function setHdr(on) {
@@ -395,6 +406,16 @@ Panel {
           Row {
             width: parent.width
             spacing: Style.space(6)
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "PROFILE"
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: Style.font.caption * 0.1
+            }
 
             Repeater {
               model: root.profiles
@@ -730,43 +751,42 @@ Panel {
               }
             }
 
-            Text {
-              visible: !root.selectedHdrOk && !root.selectedVrrOk
+            Toggle {
+              visible: root.selectedHdrOk
               width: parent.width
-              text: "HDR / VRR unavailable for this display"
+              label: "HDR"
+              description: "10-bit PQ"
+              checked: !!(root.selected && root.selected.hdr)
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              onClicked: root.setHdr(!(root.selected && root.selected.hdr))
+            }
+
+            Dropdown {
+              visible: root.selectedVrrOk
+              width: parent.width
+              label: "VRR"
+              showLabel: true
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              value: root.selected ? String(root.selected.vrr || 0) : "0"
+              options: root.vrrOptions
+              onChanged: function(v) { root.setVrr(v) }
+            }
+
+            Text {
+              visible: !root.selectedHdrOk || !root.selectedVrrOk
+              width: parent.width
+              text: {
+                if (!root.selectedHdrOk && !root.selectedVrrOk)
+                  return "HDR / VRR unavailable for this display"
+                if (!root.selectedHdrOk)
+                  return "HDR unavailable for this display"
+                return "VRR unavailable for this display"
+              }
               color: Qt.darker(root.bar.foreground, 1.4)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
-            }
-
-            Row {
-              visible: root.selectedHdrOk || root.selectedVrrOk
-              width: parent.width
-              spacing: Style.space(8)
-
-              Toggle {
-                width: (parent.width - parent.spacing) / 2
-                label: "HDR"
-                description: root.selectedHdrOk ? "10-bit PQ" : "Unavailable"
-                checked: !!(root.selected && root.selected.hdr)
-                enabled: root.selectedHdrOk
-                opacity: root.selectedHdrOk ? 1 : 0.4
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
-                onClicked: root.setHdr(!(root.selected && root.selected.hdr))
-              }
-
-              Toggle {
-                width: (parent.width - parent.spacing) / 2
-                label: "VRR"
-                description: root.selectedVrrOk ? "Adaptive-Sync" : "Unavailable"
-                checked: !!(root.selected && root.selected.vrr)
-                enabled: root.selectedVrrOk
-                opacity: root.selectedVrrOk ? 1 : 0.4
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
-                onClicked: root.setVrr(!(root.selected && root.selected.vrr))
-              }
             }
 
             Toggle {
@@ -774,7 +794,7 @@ Panel {
               label: "Enable this Display"
               description: root.enabledCount <= 1 && root.selected && root.selected.enabled
                 ? "Keep at least one screen on"
-                : "Include this panel in the layout"
+                : "Include this screen in the layout"
               checked: !!(root.selected && root.selected.enabled)
               enabled: !(root.enabledCount <= 1 && root.selected && root.selected.enabled)
               foreground: root.bar.foreground

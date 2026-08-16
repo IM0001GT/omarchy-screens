@@ -290,7 +290,9 @@ function heroStatus(mon, profileName) {
   var hz = Number(mon.refresh)
   if (isFinite(hz) && hz > 0) bits.push(Math.round(hz) + " Hz")
   if (mon.hdr) bits.push("HDR")
-  if (mon.vrr) bits.push("VRR")
+  if (Number(mon.vrr) === 1) bits.push("VRR")
+  else if (Number(mon.vrr) === 2) bits.push("VRR FS")
+  else if (Number(mon.vrr) === 3) bits.push("VRR GAME")
   return bits.length ? bits.join(" · ") : (mon.label || mon.name)
 }
 

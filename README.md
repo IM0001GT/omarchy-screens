@@ -73,7 +73,7 @@ Your last `monitors.lua` stays in place. Backups are not deleted.
 - Hyprland 0.55+ Lua monitor config (`hl.monitor`)
 - `python3` and `jq` (already on Omarchy)
 
-HDR is 10-bit PQ (`cm = hdr`). Some capture tools do not like 10-bit. VRR modes are Off, Always, and Fullscreen — the same values Hyprland uses.
+HDR is 10-bit PQ (`cm = hdr`). Some capture tools do not like 10-bit. VRR is Hyprland's four modes: Off, Always, Fullscreen, and Games & video. Always + HDR can flicker on some TVs; Fullscreen or Games & video is the usual workaround.
 
 ## Layout
 
