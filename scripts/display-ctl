@@ -95,24 +95,15 @@ def logical_size(width, height, scale, transform):
     return max(1, w), max(1, h)
 
 
-def short_make(make):
-    text = (make or "").strip()
-    text = re.sub(r"\s*,?\s*(Corporation|Inc\.?|Ltd\.?|Limited|CO\.?|Electronics)\b\.?", "", text, flags=re.I)
-    text = re.sub(r"[\s,]+", " ", text).strip(" .,")
-    return text or "Display"
-
-
-def friendly_label(mon):
-    make = short_make(mon.get("make"))
-    model = re.sub(r"\s+", " ", (mon.get("model") or "")).strip()
-    blob = " ".join([mon.get("model") or "", mon.get("description") or ""])
-    if re.search(r"SSCR2|LG TV", blob, re.I):
-        return "LG OLED"
-    if re.search(r"dual-?dvi|unknown|^$", model, re.I):
-        return make if make != "Display" else mon.get("name") or "Display"
-    if make and make.lower() not in model.lower():
-        return ("%s %s" % (make, model)).strip()
-    return model or mon.get("name") or "Display"
+def detected_label(mon):
+    # Use Hyprland's own strings. Do not invent marketing names.
+    desc = " ".join((mon.get("description") or "").split())
+    if desc:
+        return desc
+    make = " ".join((mon.get("make") or "").split())
+    model = " ".join((mon.get("model") or "").split())
+    bits = [p for p in (make, model) if p]
+    return " ".join(bits) or mon.get("name") or "Display"
 
 
 def drm_edid_path(name):
@@ -269,7 +260,7 @@ def snapshot():
             "description": mon.get("description") or "",
             "make": mon.get("make") or "",
             "model": mon.get("model") or "",
-            "label": friendly_label(mon),
+            "label": detected_label(mon),
             "enabled": not bool(mon.get("disabled")),
             "focused": bool(mon.get("focused")),
             "width": width,
