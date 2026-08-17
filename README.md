@@ -7,7 +7,7 @@ Click the two-tile mark for a panel that stays open. Displays are drawn at their
 Stock **Display** stays put (brightness and text size). Screens uses a different icon on purpose.
 
 <p align="center">
-  <img src="preview.png" alt="Screens panel with a snap layout canvas, named profile, and per-display refresh, HDR, and VRR" width="360">
+  <img width="497" height="761" alt="image" src="https://github.com/user-attachments/assets/94012df0-bf3a-4e7d-bfcc-08cee6dfcb16" />
 </p>
 
 | Click | Drag | Per screen | Profiles |
