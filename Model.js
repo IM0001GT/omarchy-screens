@@ -226,7 +226,6 @@ function applyPayload(monitors) {
       hdr: !!m.hdr,
       enabled: !!m.enabled,
       identity: m.identity,
-      description: m.description,
       mirror: m.mirror || ""
     })
   }

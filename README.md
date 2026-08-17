@@ -1,26 +1,32 @@
 # Screens
 
-An Omarchy bar widget for multi-monitor desks.
+An Omarchy bar widget that treats the desk as a layout, not a list of percentages.
 
-Click the two-tile icon for a Power-style panel that stays open. Displays are drawn at their real layout size. Drag them and they **snap flush** — no overlapping tiles, no mystery gaps that eat the cursor. Then set refresh, HDR, VRR, scale, rotation, and mirroring on the selected screen. Save the whole desk as a **profile**; Screens can restore it when a display is plugged in.
+Click the two-tile mark for a Power-style panel that stays open. Displays are drawn at their real Hyprland size. Drag them and they **snap flush** — no overlapping tiles, no cursor-eating gaps. Then set refresh, HDR, VRR, scale, rotation, and mirroring on the selected screen. Save the desk as a named **profile**; Screens can restore it when a display is plugged in.
 
-The stock **Display** widget stays where it is (brightness, text size). Screens uses a two-tile mark so the two icons never collide.
+Stock **Display** stays put (brightness and text size). Screens uses a different icon on purpose.
 
 <p align="center">
-  <img src="preview.png" alt="Screens panel with a snap layout canvas, Desk profile, and per-display refresh controls" width="360">
+  <img src="preview.png" alt="Screens panel with a snap layout canvas, named profile, and per-display refresh, HDR, and VRR" width="360">
 </p>
 
 | Click | Drag | Per screen | Profiles |
 | --- | --- | --- | --- |
-| Open the panel | Snap tiles to each other's edges | Resolution, Hz, HDR, VRR, scale, rotation, mirror, on/off | Save a desk, restore it on hotplug |
+| Open the panel | Snap tiles to neighboring edges | Resolution, Hz, HDR, four VRR modes, scale, rotation, mirror, enable | Name a desk, restore it on connect |
 
 Works with two screens or a full battlestation. A fallback Hyprland rule still catches anything you hot-plug later.
 
 ## Why this exists
 
-Omarchy's built-in Display panel does not arrange monitors or expose HDMI 2.1 features. Other marketplace tools either reuse the stock monitor glyph and skip snap, or wrap an external TUI (hyprmoncfg) so the bar only launches a daemon.
+Omarchy Quattro's Display widget does brightness, text size, and scale. It does not arrange monitors or expose HDMI 2.1 features.
 
-Screens keeps the editor in the panel: snap, Hz, HDR, VRR, and named profiles that follow make/model/serial when a display is plugged in. No AUR package, no extra daemon.
+Other listed tools cover adjacent jobs:
+
+- **Stock Display** — backlight, font size, scale presets, enable/disable
+- **hyprmoncfg** — named profiles and a hotplug daemon, via an external TUI the bar only launches
+- **Generic layout editors** — often reuse the stock monitor glyph, skip snap, and leave HDR/VRR in `monitors.lua`
+
+Screens is the other thing: the editor lives in the bar, follows the theme, and writes Hyprland Lua only after you act. No AUR package. No extra daemon.
 
 ## Install
 
@@ -42,13 +48,15 @@ cd omarchy-screens
 
 ## Use
 
-- **Click** the two-tile icon — panel stays open until you click away
-- **Drag** a tile — edges snap to neighboring screens
-- **Find** — flash a label so you know which rectangle is which
+- **Click** the two-tile icon — the panel stays open until you click away
+- **Drag** a tile — edges snap so the cursor never falls in a gap
+- **Find** — badge on the *selected* output (not only the screen that holds the menu)
 - Pick a screen, then set **resolution**, **refresh**, **HDR**, **VRR**, **scale**, **orientation**, or **mirror**
-- **Save** / **Desk** / **Auto** at the top — compact profile chips. Auto restores the matching desk on hotplug
-- Displays are labeled with Hyprland's model string. HDR / VRR disable themselves when the panel cannot do them
-- Changes write `~/.config/hypr/monitors.lua` and reload Hyprland (backups and profiles land in `~/.local/state/im0001gt.screens/`)
+- **Save** names the current layout. Two or more profiles become a dropdown. **On connect** reapplies a matching profile when a display is plugged in
+- Labels use Hyprland's model string. HDR and VRR disable themselves when that panel cannot do them
+- **Make primary** chooses which screen the panel prefers when it opens
+
+Changes write `~/.config/hypr/monitors.lua` after you drag, toggle, or save. Backups and profiles land in `~/.local/state/im0001gt.screens/`. Stock Omarchy monitor files are replaced; other custom files keep their text and get a managed block appended.
 
 Move it with `omarchy bar move im0001gt.screens`.
 
@@ -65,7 +73,7 @@ omarchy restart shell
 omarchy plugin remove im0001gt.screens
 ```
 
-Your last `monitors.lua` stays in place. Backups are not deleted.
+Your last `monitors.lua` stays in place. Backups and profiles are not deleted.
 
 ## Requirements
 
@@ -73,7 +81,7 @@ Your last `monitors.lua` stays in place. Backups are not deleted.
 - Hyprland 0.55+ Lua monitor config (`hl.monitor`)
 - `python3` and `jq` (already on Omarchy)
 
-HDR is 10-bit PQ (`cm = hdr`). Some capture tools do not like 10-bit. VRR is Hyprland's four modes: Off, Always, Fullscreen, and Games & video. Always + HDR can flicker on some TVs; Fullscreen or Games & video is the usual workaround.
+HDR is 10-bit PQ (`cm = hdr`, `bitdepth = 10`). Some capture tools do not like 10-bit. VRR is Hyprland's four modes: Off, Always, Fullscreen, and Games & video. Always + HDR can flicker on some OLEDs; Fullscreen or Games & video is the usual workaround.
 
 ## Layout
 

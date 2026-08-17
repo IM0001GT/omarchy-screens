@@ -4,11 +4,12 @@
 Commands:
   state              JSON snapshot of monitors + saved profiles
   apply <json>       write ~/.config/hypr/monitors.lua and reload
-  identify [name]    flash a Hyprland notify for one or every screen
+  identify [name]    flash a Hyprland notify (panel Find uses its own overlay)
   profile save <name> [json]   store a hardware-aware layout
   profile delete <name>
   profile apply <name>
   profile auto 0|1
+  profile primary <identity>
 """
 
 from __future__ import annotations
@@ -145,11 +146,9 @@ def edid_caps(name):
                     vrr = True
             if tag == 3 and len(payload) >= 3:
                 oui = (payload[0] << 16) | (payload[1] << 8) | payload[2]
-                # HDMI Licensing, HDMI Forum, AMD, VESA
-                if oui in (0x000C03, 0xC45DD8, 0x00001A, 0x3A0292):
-                    blob = payload.lower() if False else payload
-                    if b"freesync" in data.lower() or oui in (0x00001A, 0xC45DD8):
-                        vrr = True
+                # HDMI Forum SCDB, AMD FreeSync
+                if oui in (0xC45DD8, 0x00001A):
+                    vrr = True
 
     walk(data[128:256] if len(data) >= 256 else b"")
     if len(data) >= 384:
@@ -263,8 +262,6 @@ def snapshot():
             hdr_cap = True
         if vrr_mode(mon):
             vrr_cap = True
-        # HDMI 2.1 sets and high-refresh DP panels often omit VRR in EDID
-        # but still accept Adaptive-Sync / HDMI VRR from the compositor.
         if not vrr_cap and any(p["refresh"] >= 100 for p in modes):
             vrr_cap = True
         mirror = mon.get("mirrorOf") or ""
@@ -422,13 +419,81 @@ def profile_rule(profile, identity):
     return None
 
 
+MODE_RE = re.compile(
+    r"^(preferred|highres|highrr|maxwidth|\d{3,5}x\d{3,5}(@\d{1,4}(\.\d{1,3})?)?)$"
+)
+PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,_+-]{0,47}$")
+CONNECTOR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
+
+
+def clean_profile_name(name):
+    text = " ".join(str(name or "").split())
+    if not PROFILE_NAME_RE.match(text):
+        return ""
+    return text
+
+
+def clean_mode(mode):
+    text = str(mode or "preferred").strip()
+    return text if MODE_RE.match(text) else "preferred"
+
+
+def clean_int(value, lo, hi, default=0):
+    try:
+        n = int(round(float(value)))
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def clean_scale(value):
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return 1
+    if n <= 0 or n > 8:
+        return 1
+    return round(n, 3)
+
+
+def clean_connector(name):
+    text = str(name or "").strip()
+    return text if CONNECTOR_RE.match(text) else ""
+
+
+def sanitize_monitor(mon, known_names=None):
+    known_names = known_names or set()
+    name = clean_connector(mon.get("name"))
+    desc = " ".join(str(mon.get("description") or "").split())
+    if "\n" in desc or "\r" in desc:
+        desc = ""
+    mirror = clean_connector(mon.get("mirror"))
+    if mirror and mirror == name:
+        mirror = ""
+    if mirror and known_names and mirror not in known_names:
+        mirror = ""
+    return {
+        "name": name,
+        "description": desc,
+        "mode": clean_mode(mon.get("mode")),
+        "x": clean_int(mon.get("x"), -32768, 32767, 0),
+        "y": clean_int(mon.get("y"), -32768, 32767, 0),
+        "scale": clean_scale(mon.get("scale")),
+        "transform": clean_int(mon.get("transform"), 0, 7, 0),
+        "vrr": clean_int(mon.get("vrr"), 0, 3, 0),
+        "hdr": bool(mon.get("hdr")),
+        "enabled": bool(mon.get("enabled", True)),
+        "identity": mon.get("identity") or "",
+        "mirror": mirror,
+    }
+
+
 def output_ref(mon, used_desc):
-    desc = (mon.get("description") or "").strip()
-    desc = re.sub(r"\s+\([^)]+\)$", "", desc)
+    desc = clean_desc(mon.get("description") or "")
     if desc and desc not in used_desc:
         used_desc.add(desc)
         return "desc:%s" % desc
-    return mon.get("name") or ""
+    return clean_connector(mon.get("name")) or "Unknown"
 
 
 def monitor_lua(mon, used_desc):
@@ -444,8 +509,7 @@ def monitor_lua(mon, used_desc):
     transform = int(mon.get("transform") or 0)
     if transform:
         fields.append("transform = %d" % transform)
-    # Always persist VRR. hyprctl often reports it as a boolean false even
-    # when the compositor is using the per-output setting.
+    # Persist the integer even when 0. hyprctl often reports VRR as a boolean.
     fields.append("vrr = %d" % int(mon.get("vrr") or 0))
     if mon.get("hdr"):
         fields.append("bitdepth = 10")
@@ -525,7 +589,12 @@ def write_monitors_lua(monitors):
     inner.append(MANAGED_END)
     block = "\n".join(inner) + "\n"
     spliced = splice_managed(existing, block)
-    text = spliced if spliced is not None else render_lua(monitors, gdk)
+    if spliced is not None:
+        text = spliced
+    elif re.search(r'output\s*=\s*""\s*,\s*mode\s*=\s*"preferred"', existing) and existing.count("hl.monitor") <= 2:
+        text = render_lua(monitors, gdk)
+    else:
+        text = (existing.rstrip() + "\n\n" + block) if existing.strip() else render_lua(monitors, gdk)
     backup_file(MONITORS_LUA)
     os.makedirs(os.path.dirname(MONITORS_LUA), exist_ok=True)
     tmp = MONITORS_LUA + ".tmp"
@@ -552,6 +621,8 @@ def apply(payload):
     if not isinstance(monitors, list) or not monitors:
         print("apply: expected {\"monitors\": [...]}", file=sys.stderr)
         return 2
+    known = {clean_connector(m.get("name")) for m in monitors if clean_connector(m.get("name"))}
+    monitors = [sanitize_monitor(m, known) for m in monitors]
     enabled = [m for m in monitors if m.get("enabled", True)]
     if not enabled:
         print("apply: refusing to disable every display", file=sys.stderr)
@@ -620,9 +691,9 @@ def merge_profile(profile, live):
 
 
 def save_profile(name, payload=None):
-    name = (name or "").strip()
+    name = clean_profile_name(name)
     if not name:
-        print("profile save: name required", file=sys.stderr)
+        print("profile save: name must be 1-48 letters, numbers, or simple punctuation", file=sys.stderr)
         return 2
     if payload and payload.get("monitors"):
         monitors = payload["monitors"]
@@ -643,6 +714,7 @@ def save_profile(name, payload=None):
 
 
 def delete_profile(name):
+    name = clean_profile_name(name)
     store = load_store()
     store["profiles"] = [p for p in store["profiles"] if p.get("name") != name]
     if store.get("active") == name:
@@ -653,6 +725,7 @@ def delete_profile(name):
 
 
 def apply_profile(name):
+    name = clean_profile_name(name)
     store = load_store()
     profile = find_profile(store, name)
     if not profile:

@@ -113,11 +113,6 @@ Panel {
     }
   }
 
-  function selectByName(name) {
-    var i = Model.indexByName(root.monitors, name)
-    if (i >= 0) root.selectedIndex = i
-  }
-
   function mutateSelected(fn) {
     if (!root.selected) return
     var next = Model.clone(root.monitors)
