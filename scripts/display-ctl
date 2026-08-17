@@ -4,12 +4,15 @@
 Commands:
   state              JSON snapshot of monitors + saved profiles
   apply <json>       write ~/.config/hypr/monitors.lua and reload
+  enable <name>      turn a disabled connected output back on
+  unmirror           clear mirrors and restore the last saved desk
   identify [name]    flash a Hyprland notify (panel Find uses its own overlay)
   profile save <name> [json]   store a hardware-aware layout
   profile delete <name>
   profile apply <name>
   profile auto 0|1
   profile primary <identity>
+  idle off|on|notice
 """
 
 from __future__ import annotations
@@ -245,6 +248,148 @@ def group_resolutions(modes):
     return grouped
 
 
+def layout_hints(store, match_name):
+    hints = {}
+
+    def absorb(entries):
+        for entry in entries or []:
+            if isinstance(entry, dict) and entry.get("id"):
+                hints[entry["id"]] = entry
+
+    absorb(store.get("lastLayout"))
+    if hints:
+        return hints
+    profile = find_profile(store, store.get("active") or "") or find_profile(
+        store, match_name or ""
+    )
+    if profile:
+        absorb(profile.get("monitors"))
+    return hints
+
+
+def rects_overlap(a, b):
+    return (
+        a["x"] < b["x"] + b["logicalW"]
+        and a["x"] + a["logicalW"] > b["x"]
+        and a["y"] < b["y"] + b["logicalH"]
+        and a["y"] + a["logicalH"] > b["y"]
+    )
+
+
+def restore_disabled_geometry(monitors, hints):
+    if not hints:
+        return
+    dx = dy = 0
+    for mon in monitors:
+        if not mon.get("enabled"):
+            continue
+        rule = hints.get(mon.get("identity") or "")
+        if rule and "x" in rule:
+            dx = int(mon.get("x") or 0) - int(rule.get("x") or 0)
+            dy = int(mon.get("y") or 0) - int(rule.get("y") or 0)
+            break
+    for entry in monitors:
+        if entry.get("enabled"):
+            continue
+        rule = hints.get(entry.get("identity") or "")
+        if not rule:
+            continue
+        if "x" in rule:
+            entry["x"] = int(rule.get("x") or 0) + dx
+        if "y" in rule:
+            entry["y"] = int(rule.get("y") or 0) + dy
+        if (not entry.get("width") or not entry.get("height")) and rule.get("mode"):
+            parsed = parse_mode(rule["mode"])
+            if parsed:
+                entry["mode"] = rule["mode"]
+                entry["width"] = parsed["width"]
+                entry["height"] = parsed["height"]
+                entry["refresh"] = parsed["refresh"]
+        if "scale" in rule:
+            entry["scale"] = rule["scale"]
+        if "transform" in rule:
+            entry["transform"] = int(rule.get("transform") or 0)
+        entry["logicalW"], entry["logicalH"] = logical_size(
+            entry.get("width"),
+            entry.get("height"),
+            entry.get("scale"),
+            entry.get("transform"),
+        )
+
+
+def park_disabled(monitors):
+    enabled = [m for m in monitors if m.get("enabled")]
+    if not enabled:
+        return
+    cursor_x = max(m["x"] + m["logicalW"] for m in enabled)
+    cursor_y = min(m["y"] for m in enabled)
+    for mon in monitors:
+        if mon.get("enabled"):
+            continue
+        mon["x"] = cursor_x
+        mon["y"] = cursor_y
+        cursor_x += mon["logicalW"]
+
+
+def drm_connected_names():
+    names = []
+    for path in sorted(glob.glob("/sys/class/drm/card*-*/status")):
+        try:
+            status = open(path, encoding="utf-8").read().strip()
+        except OSError:
+            continue
+        if status != "connected":
+            continue
+        base = os.path.basename(os.path.dirname(path))
+        name = re.sub(r"^card\d+-", "", base)
+        if not name or name.startswith("Writeback"):
+            continue
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def stub_monitor(name):
+    entry = {
+        "name": name,
+        "description": "",
+        "make": "",
+        "model": "",
+        "label": name,
+        "enabled": False,
+        "focused": False,
+        "width": 1920,
+        "height": 1080,
+        "refresh": 60,
+        "x": 0,
+        "y": 0,
+        "scale": 1,
+        "transform": 0,
+        "vrr": 0,
+        "cm": "srgb",
+        "format": "",
+        "hdr": False,
+        "hdrCapable": False,
+        "vrrCapable": False,
+        "logicalW": 1920,
+        "logicalH": 1080,
+        "mode": "preferred",
+        "resolutions": [],
+        "physicalW": 0,
+        "physicalH": 0,
+        "mirror": "",
+    }
+    entry["identity"] = name
+    return entry
+
+
+def merge_drm_connected(monitors):
+    have = {m.get("name") for m in monitors}
+    for name in drm_connected_names():
+        if name not in have:
+            monitors.append(stub_monitor(name))
+
+
 def snapshot():
     raw = hypr_json(["monitors", "all"]) or []
     monitors = []
@@ -306,10 +451,21 @@ def snapshot():
             entry["vrr"] = lua_vrr[key]
         elif entry.get("name") in lua_vrr:
             entry["vrr"] = lua_vrr[entry["name"]]
-    monitors.sort(key=lambda m: (not m["enabled"], m["x"], m["y"], m["name"]))
+    merge_drm_connected(monitors)
     store = load_store()
     ids = [m["identity"] for m in monitors if m.get("identity")]
     match = match_profile(store, ids)
+    restore_disabled_geometry(monitors, layout_hints(store, match))
+    park_disabled(monitors)
+    monitors.sort(key=lambda m: (not m["enabled"], m["x"], m["y"], m["name"]))
+    drm = drm_outputs()
+    primary_drv = primary_drivers(drm)
+    hybrid = hybrid_gpus(drm)
+    by_drm = {e["name"]: e for e in drm}
+    for entry in monitors:
+        info = by_drm.get(entry.get("name") or "") or {}
+        drv = info.get("driver") or ""
+        entry["secondaryGpu"] = bool(hybrid and drv and drv not in primary_drv)
     primary = store.get("primary") or ""
     if not primary:
         focused = next((m for m in monitors if m.get("focused")), None)
@@ -331,6 +487,8 @@ def snapshot():
         "match": match or "",
         "primary": primary,
         "connectedKey": "\n".join(sorted(ids)),
+        "hybridGpus": hybrid_gpus(),
+        "hybridNotice": hybrid_gpus() and not store.get("hybridNoticeShown"),
     }
 
 
@@ -360,7 +518,16 @@ def connected_key(monitors):
 
 
 def load_store():
-    store = {"active": "", "autoSwitch": True, "lastKey": "", "primary": "", "profiles": []}
+    store = {
+        "active": "",
+        "autoSwitch": True,
+        "lastKey": "",
+        "primary": "",
+        "profiles": [],
+        "lastLayout": [],
+        "deskLayout": [],
+        "hybridNoticeShown": False,
+    }
     try:
         with open(PROFILES_PATH, encoding="utf-8") as fh:
             data = json.load(fh)
@@ -372,9 +539,169 @@ def load_store():
             profiles = data.get("profiles")
             if isinstance(profiles, list):
                 store["profiles"] = profiles
+            last_layout = data.get("lastLayout")
+            if isinstance(last_layout, list):
+                store["lastLayout"] = last_layout
+            desk_layout = data.get("deskLayout")
+            if isinstance(desk_layout, list):
+                store["deskLayout"] = desk_layout
+            store["hybridNoticeShown"] = bool(data.get("hybridNoticeShown"))
     except (OSError, json.JSONDecodeError):
         pass
     return store
+
+
+def remember_layout(monitors):
+    store = load_store()
+    entries = [profile_entry_from_monitor(m) for m in monitors if monitor_identity(m)]
+    store["lastLayout"] = entries
+    if not any((e.get("mirror") or "") for e in entries):
+        store["deskLayout"] = entries
+    save_store(store)
+
+
+def layout_map(entries):
+    out = {}
+    for entry in entries or []:
+        if isinstance(entry, dict) and entry.get("id"):
+            out[entry["id"]] = entry
+    return out
+
+
+def restore_desk_geometry(monitors):
+    store = load_store()
+    hints = layout_map(store.get("deskLayout"))
+    if not hints:
+        profile = find_profile(store, store.get("active") or "")
+        if profile:
+            hints = layout_map(profile.get("monitors"))
+    if not hints:
+        return monitors
+    for mon in monitors:
+        rule = hints.get(mon.get("identity") or "")
+        if not rule:
+            continue
+        for key in ("mode", "x", "y", "scale", "transform", "vrr", "hdr"):
+            if key in rule:
+                mon[key] = rule[key]
+        mon["mirror"] = ""
+        mon["logicalW"], mon["logicalH"] = logical_size(
+            mon.get("width"),
+            mon.get("height"),
+            mon.get("scale"),
+            mon.get("transform"),
+        )
+    return monitors
+
+
+def drm_outputs():
+    out = []
+    for path in sorted(glob.glob("/sys/class/drm/card*-*/status")):
+        try:
+            status = open(path, encoding="utf-8").read().strip()
+        except OSError:
+            continue
+        if status != "connected":
+            continue
+        base = os.path.basename(os.path.dirname(path))
+        m = re.match(r"card(\d+)-(.+)$", base)
+        if not m or m.group(2).startswith("Writeback"):
+            continue
+        card = int(m.group(1))
+        driver = ""
+        try:
+            driver = os.path.basename(os.path.realpath("/sys/class/drm/card%d/device/driver" % card))
+        except OSError:
+            pass
+        out.append({"name": m.group(2), "card": card, "driver": driver})
+    return out
+
+
+def hybrid_gpus(entries=None):
+    entries = drm_outputs() if entries is None else entries
+    return len({e["card"] for e in entries}) > 1
+
+
+def primary_drivers(entries=None):
+    entries = drm_outputs() if entries is None else entries
+    drivers = {e["driver"] for e in entries if e.get("driver")}
+    if "nvidia" in drivers:
+        return {"nvidia"}
+    boot = None
+    for card in {e["card"] for e in entries}:
+        try:
+            flag = open("/sys/class/drm/card%d/device/boot_vga" % card, encoding="utf-8").read().strip()
+        except OSError:
+            continue
+        if flag == "1":
+            boot = card
+            break
+    if boot is not None:
+        return {e["driver"] for e in entries if e["card"] == boot and e.get("driver")}
+    return drivers
+
+
+def hypr_dpms(action, monitor=None):
+    if monitor:
+        expr = 'hl.dsp.dpms({ action = %s, monitor = %s })' % (lua_str(action), lua_str(monitor))
+    else:
+        expr = 'hl.dsp.dpms({ action = %s })' % lua_str(action)
+    run(["hyprctl", "eval", "hl.dispatch(%s)" % expr])
+
+
+def screens_blank(name):
+    run(["omarchy-shell", "-q", "im0001gt.screens", "blank", name])
+
+
+def screens_unblank():
+    run(["omarchy-shell", "-q", "im0001gt.screens", "unblank"])
+
+
+def packaged_brightness():
+    path = "/usr/share/omarchy/bin/omarchy-brightness-display"
+    return path if os.path.isfile(path) and os.access(path, os.X_OK) else ""
+
+
+def idle_off():
+    entries = drm_outputs()
+    if not hybrid_gpus(entries):
+        real = packaged_brightness()
+        if real:
+            run([real, "off"])
+        else:
+            hypr_dpms("disable")
+        return 0
+    # Primary = Aquamarine's render GPU (NVIDIA when present, else boot_vga).
+    # Any output on another GPU is blanked instead of Hyprland-DPMS'd.
+    primary = primary_drivers(entries)
+    live = hypr_json(["monitors"]) or []
+    names = [m.get("name") for m in live if m.get("name") and not m.get("disabled")]
+    by_name = {e["name"]: e for e in entries}
+    for name in names:
+        info = by_name.get(name) or {}
+        if info.get("driver") in primary:
+            hypr_dpms("disable", name)
+        else:
+            screens_blank(name)
+    return 0
+
+
+def idle_on():
+    screens_unblank()
+    real = packaged_brightness()
+    if real:
+        run([real, "on"])
+    else:
+        hypr_dpms("enable")
+    return 0
+
+
+def notice_seen():
+    store = load_store()
+    store["hybridNoticeShown"] = True
+    save_store(store)
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
 
 
 def save_store(store):
@@ -646,8 +973,48 @@ def apply(payload):
             reload_hypr()
         print(errors, file=sys.stderr)
         return 1
+    prev_store = load_store()
+    remember_layout(monitors)
+    wake_new_outputs(monitors, prev_store)
     print(json.dumps(snapshot(), separators=(",", ":")))
     return 0
+
+
+def was_disabled(store, identity):
+    for entry in store.get("lastLayout") or []:
+        if entry.get("id") == identity:
+            return not entry.get("enabled", True)
+    return False
+
+
+def hypr_dispatch(expr):
+    run(["hyprctl", "eval", "hl.dispatch(%s)" % expr])
+
+
+def wake_new_outputs(monitors, prev_store):
+    newly = []
+    for mon in monitors:
+        if not mon.get("enabled", True):
+            continue
+        ident = monitor_identity(mon)
+        if ident and was_disabled(prev_store, ident):
+            newly.append(mon)
+    if not newly:
+        return
+    hypr_dispatch('hl.dsp.dpms({ action = "on" })')
+    hypr_dispatch("hl.dsp.force_renderer_reload()")
+    focused = ""
+    live = hypr_json(["monitors"]) or []
+    for mon in live:
+        if mon.get("focused"):
+            focused = mon.get("name") or ""
+            break
+    for mon in newly:
+        name = clean_connector(mon.get("name"))
+        if name:
+            hypr_dispatch("hl.dsp.focus({ monitor = %s })" % lua_str(name))
+    if focused:
+        hypr_dispatch("hl.dsp.focus({ monitor = %s })" % lua_str(focused))
 
 
 def profile_entry_from_monitor(mon):
@@ -755,6 +1122,40 @@ def set_primary(identity):
     return 0
 
 
+def enable_output(name):
+    want = (name or "").strip()
+    if not want:
+        print("enable: missing output name", file=sys.stderr)
+        return 2
+    data = snapshot()
+    monitors = data.get("monitors") or []
+    found = None
+    for mon in monitors:
+        if mon.get("name") == want or mon.get("identity") == want:
+            found = mon
+            break
+    if not found:
+        print("enable: no such display: %s" % want, file=sys.stderr)
+        return 2
+    found["enabled"] = True
+    store = load_store()
+    if store.get("autoSwitch", True):
+        ids = [m.get("identity") for m in monitors if m.get("enabled", True) and m.get("identity")]
+        match = match_profile(store, ids)
+        if match:
+            return apply_profile(match)
+    return apply({"monitors": monitors})
+
+
+def unmirror():
+    data = snapshot()
+    monitors = data.get("monitors") or []
+    for mon in monitors:
+        mon["mirror"] = ""
+    restore_desk_geometry(monitors)
+    return apply({"monitors": monitors})
+
+
 def identify(name=None):
     data = snapshot()
     targets = data["monitors"]
@@ -784,6 +1185,10 @@ def main(argv):
             print("apply: bad json: %s" % exc, file=sys.stderr)
             return 2
         return apply(payload)
+    if cmd == "enable":
+        return enable_output(argv[1] if len(argv) > 1 else "")
+    if cmd == "unmirror":
+        return unmirror()
     if cmd == "identify":
         return identify(argv[1] if len(argv) > 1 else None)
     if cmd == "profile":
@@ -804,6 +1209,16 @@ def main(argv):
         if action == "primary":
             return set_primary(argv[2] if len(argv) > 2 else "")
         print("profile: unknown action: %s" % action, file=sys.stderr)
+        return 2
+    if cmd == "idle":
+        action = argv[1] if len(argv) > 1 else ""
+        if action == "off":
+            return idle_off()
+        if action == "on":
+            return idle_on()
+        if action == "notice":
+            return notice_seen()
+        print("idle: off|on|notice", file=sys.stderr)
         return 2
     print("unknown command: %s" % cmd, file=sys.stderr)
     return 2

@@ -1,0 +1,45 @@
+#!/bin/bash
+# Idle display policy lives in display-ctl. This wrapper only intercepts
+# the packaged off/on verbs used by Omarchy lock.
+
+set -euo pipefail
+
+HERE="$(cd -- "$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+CTL="$HERE/display-ctl"
+REAL="/usr/share/omarchy/bin/omarchy-brightness-display"
+
+if [[ ! -x $REAL ]]; then
+  REAL="$(command -v -a omarchy-brightness-display | grep -v "^$0$" | head -1 || true)"
+fi
+if [[ -z ${REAL:-} || ! -x $REAL ]]; then
+  echo "omarchy-brightness-display: packaged command not found" >&2
+  exit 127
+fi
+
+wants_off=0
+wants_on=0
+explicit_monitor=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[$i]}" in
+    --monitor)
+      if (( i + 1 < ${#args[@]} )); then
+        explicit_monitor="${args[$((i + 1))]}"
+      fi
+      ;;
+    off) wants_off=1 ;;
+    on) wants_on=1 ;;
+  esac
+done
+
+if [[ -x $CTL && -z $explicit_monitor ]]; then
+  if (( wants_off )); then
+    exec "$CTL" idle off
+  fi
+  if (( wants_on )); then
+    "$CTL" idle on >/dev/null || true
+    exec "$REAL" "$@"
+  fi
+fi
+
+exec "$REAL" "$@"

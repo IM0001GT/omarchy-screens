@@ -38,6 +38,13 @@ Panel {
   property bool namingProfile: false
   property string primaryId: ""
   property bool userPicked: false
+  property bool detectPending: false
+  property string detectNote: ""
+  property string pendingProfile: ""
+  property bool pendingIdentify: false
+  property var standbyNames: []
+  property bool hybridGpus: false
+  property bool showHybridNotice: false
 
   readonly property var selected: {
     if (selectedIndex < 0 || selectedIndex >= monitors.length) return null
@@ -48,6 +55,7 @@ Panel {
     for (var i = 0; i < monitors.length; i++) if (monitors[i].enabled) n++
     return n
   }
+  readonly property int disabledCount: Math.max(0, monitors.length - enabledCount)
   readonly property var scalePresets: ["1", "1.25", "1.5", "2"]
   readonly property var rotateOptions: [
     { value: "0", label: "Landscape" },
@@ -75,6 +83,7 @@ Panel {
   }
   readonly property bool selectedHdrOk: !!(selected && selected.hdrCapable)
   readonly property bool selectedVrrOk: !!(selected && selected.vrrCapable)
+  readonly property bool selectedSecondaryGpu: !!(selected && selected.secondaryGpu)
   readonly property var identifyScreen: {
     var name = selected ? selected.name : ""
     var screens = Quickshell.screens
@@ -90,6 +99,12 @@ Panel {
   }
 
   function adopt(data) {
+    var keepId = ""
+    var keepName = ""
+    if (root.userPicked && root.selected) {
+      keepId = root.selected.identity || ""
+      keepName = root.selected.name || ""
+    }
     var list = (data && data.monitors) ? Model.clone(data.monitors) : []
     root.monitors = list
     root.profiles = (data && data.profiles) ? data.profiles : []
@@ -97,8 +112,31 @@ Panel {
     root.autoSwitch = !data || data.autoSwitch !== false
     root.matchProfile = (data && data.match) ? String(data.match) : ""
     root.primaryId = (data && data.primary) ? String(data.primary) : ""
+    root.hybridGpus = !!(data && data.hybridGpus)
+    if (data && data.hybridNotice === false) root.showHybridNotice = false
+    else if (root.opened && data && data.hybridNotice) root.showHybridNotice = true
     if (root.activeProfile && !root.namingProfile) root.profileName = root.activeProfile
-    if (!root.userPicked) {
+    if (root.detectPending) {
+      root.detectPending = false
+      var off = -1
+      for (var d = 0; d < list.length; d++) {
+        if (list[d] && !list[d].enabled) { off = d; break }
+      }
+      if (off >= 0) {
+        root.userPicked = true
+        root.selectedIndex = off
+        root.detectNote = "Found " + (list[off].label || list[off].name) + " — turn it on below"
+        if (list[off].secondaryGpu)
+          root.detectNote += ". If it stays blank, restart Hyprland or the machine."
+      } else {
+        root.detectNote = "No other displays found"
+      }
+    } else if (keepId || keepName) {
+      var kept = keepId ? Model.indexByIdentity(list, keepId) : -1
+      if (kept < 0 && keepName) kept = Model.indexByName(list, keepName)
+      if (kept >= 0) root.selectedIndex = kept
+      else if (root.selectedIndex >= list.length) root.selectedIndex = Math.max(0, list.length - 1)
+    } else if (!root.userPicked) {
       var pick = Model.preferredIndex(list, root.barScreenName, root.primaryId)
       if (pick >= 0) root.selectedIndex = pick
     } else if (root.selectedIndex >= list.length) {
@@ -166,11 +204,53 @@ Panel {
 
   function setEnabled(on) {
     if (!on && root.enabledCount <= 1) return
+    root.userPicked = true
+    if (!on && root.selectedSecondaryGpu) {
+      root.detectNote = "If this panel stays blank after you turn it back on, restart Hyprland or the machine."
+    }
     mutateSelected(function(m) { m.enabled = !!on })
   }
 
+  function detect() {
+    root.detectPending = true
+    root.detectNote = "Looking for displays…"
+    refresh()
+  }
+
+  function enableAt(index) {
+    if (index < 0 || index >= root.monitors.length) return
+    if (root.monitors[index].enabled) return
+    root.userPicked = true
+    root.selectedIndex = index
+    root.detectNote = root.monitors[index].secondaryGpu
+      ? "If this panel is listed but stays blank, restart Hyprland or the machine."
+      : ""
+    root.pendingIdentify = true
+    var saved = root.matchProfile || root.activeProfile
+    if (root.autoSwitch && saved) {
+      applyProfile(saved)
+      return
+    }
+    var next = Model.clone(root.monitors)
+    next[index].enabled = true
+    root.monitors = next
+    applyNow()
+  }
+
   function setMirror(name) {
-    mutateSelected(function(m) { m.mirror = name || "" })
+    if (name) {
+      mutateSelected(function(m) { m.mirror = name })
+      return
+    }
+    var saved = root.activeProfile || root.matchProfile
+    if (saved) {
+      applyProfile(saved)
+      return
+    }
+    if (applyProc.running) return
+    applyProc.command = [root.ctl, "unmirror"]
+    root.applying = true
+    applyProc.running = true
   }
 
   function runStore(args) {
@@ -221,7 +301,10 @@ Panel {
   function applyProfile(name) {
     if (!name) return
     root.profileName = name
-    if (applyProc.running) return
+    if (applyProc.running) {
+      root.pendingProfile = name
+      return
+    }
     applyProc.command = [root.ctl, "profile", "apply", name]
     root.applying = true
     applyProc.running = true
@@ -230,6 +313,11 @@ Panel {
   function setAutoSwitch(on) {
     root.autoSwitch = !!on
     root.runStore(["profile", "auto", on ? "1" : "0"])
+  }
+
+  function dismissHybridNotice() {
+    root.showHybridNotice = false
+    root.runStore(["idle", "notice"])
   }
 
   function setPrimary() {
@@ -244,12 +332,39 @@ Panel {
     identifyTimer.restart()
   }
 
+  function standbyOn(name) {
+    var n = String(name || "")
+    if (!n) return
+    var next = []
+    for (var i = 0; i < root.standbyNames.length; i++) {
+      if (root.standbyNames[i] !== n) next.push(root.standbyNames[i])
+    }
+    next.push(n)
+    root.standbyNames = next
+  }
+
+  function standbyOff() {
+    root.standbyNames = []
+  }
+
+  function isStandbyScreen(name) {
+    var n = String(name || "")
+    for (var i = 0; i < root.standbyNames.length; i++) {
+      if (root.standbyNames[i] === n) return true
+    }
+    return false
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
   Component.onCompleted: refresh()
   onOpenedChanged: {
-    if (!opened) return
+    if (!opened) {
+      root.detectNote = ""
+      root.detectPending = false
+      return
+    }
     root.userPicked = false
     refresh()
   }
@@ -262,6 +377,8 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
+    function blank(name: string): void { root.standbyOn(name) }
+    function unblank(): void { root.standbyOff() }
   }
 
   Timer {
@@ -298,6 +415,16 @@ Panel {
         root.applying = false
         try { root.adopt(JSON.parse(text)) }
         catch (e) { root.refresh() }
+        if (root.pendingProfile) {
+          var nextProfile = root.pendingProfile
+          root.pendingProfile = ""
+          root.applyProfile(nextProfile)
+          return
+        }
+        if (root.pendingIdentify) {
+          root.pendingIdentify = false
+          root.identify()
+        }
       }
     }
     onExited: function(code) {
@@ -359,7 +486,7 @@ Panel {
 
           Item {
             width: parent.width
-            implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, identifyBtn.implicitHeight)
+            implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, heroActions.implicitHeight)
 
             ScreenMark {
               id: heroIcon
@@ -374,7 +501,7 @@ Panel {
               id: heroLabels
               anchors.left: heroIcon.right
               anchors.leftMargin: Style.space(14)
-              anchors.right: identifyBtn.left
+              anchors.right: heroActions.left
               anchors.rightMargin: Style.space(10)
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(2)
@@ -390,7 +517,9 @@ Panel {
               }
 
               Text {
-                text: (root.dragging ? "Snapping edges" : Model.heroStatus(root.selected, root.activeProfile)).toUpperCase()
+                text: (root.dragging ? "Snapping edges"
+                  : root.detectNote ? root.detectNote
+                  : Model.heroStatus(root.selected, root.activeProfile)).toUpperCase()
                 color: Qt.darker(root.bar.foreground, 1.4)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
@@ -401,18 +530,61 @@ Panel {
               }
             }
 
-            Button {
-              id: identifyBtn
+            Row {
+              id: heroActions
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              text: "Find"
+              spacing: Style.space(6)
+
+              Button {
+                text: "Detect"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(4)
+                onClicked: root.detect()
+              }
+
+              Button {
+                id: identifyBtn
+                text: "Find"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(4)
+                enabled: !!(root.selected && root.selected.enabled && root.identifyScreen)
+                onClicked: root.identify()
+              }
+            }
+          }
+
+          Column {
+            visible: root.showHybridNotice
+            width: parent.width
+            spacing: Style.space(8)
+
+            Text {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: "Displays are on more than one GPU. Hyprland can leave any panel on a non-primary GPU blank after standby or after you disable it, until you restart Hyprland or the machine. Idle sleep only the primary GPU's panel; other GPUs stay on but black. Detect can find a disabled output — if Turn on lists it but the picture never appears, reboot Hyprland or the system."
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Button {
+              text: "Got it"
               fontSize: Style.font.caption
               fontFamily: root.bar.fontFamily
               foreground: root.bar.foreground
               bordered: true
               horizontalPadding: Style.space(10)
               verticalPadding: Style.space(4)
-              onClicked: root.identify()
+              onClicked: root.dismissHybridNotice()
             }
           }
 
@@ -442,7 +614,7 @@ Panel {
                 fontFamily: root.bar.fontFamily
                 value: root.activeProfile
                 options: Model.profileOptions(root.profiles)
-                onChanged: function(v) { if (v && v !== root.activeProfile) root.applyProfile(v) }
+                onChanged: function(v) { if (v) root.applyProfile(v) }
               }
 
               Button {
@@ -455,6 +627,21 @@ Panel {
                 active: true
                 horizontalPadding: Style.space(10)
                 verticalPadding: Style.space(3)
+                tooltipText: "Apply this saved layout"
+                onClicked: root.applyProfile(root.firstProfileName())
+              }
+
+              Button {
+                visible: !root.namingProfile && root.profiles.length > 1 && !!root.activeProfile
+                text: "Apply"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(3)
+                tooltipText: "Apply the selected layout"
+                onClicked: root.applyProfile(root.activeProfile)
               }
 
               Button {
@@ -547,11 +734,66 @@ Panel {
           Column {
             width: parent.width
             spacing: Style.space(6)
+            visible: root.disabledCount > 0 || root.detectNote !== ""
+
+            Repeater {
+              model: root.monitors.length
+
+              Item {
+                required property int index
+                readonly property var mon: root.monitors[index]
+                visible: !!(mon && !mon.enabled)
+                width: parent.width
+                implicitHeight: visible ? Math.max(offLabel.implicitHeight, offBtn.implicitHeight) : 0
+
+                Text {
+                  id: offLabel
+                  anchors.left: parent.left
+                  anchors.right: offBtn.left
+                  anchors.rightMargin: Style.space(8)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: (mon ? (mon.label || mon.name) : "") + " · Off"
+                  color: root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.body
+                  elide: Text.ElideRight
+                }
+
+                Button {
+                  id: offBtn
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Turn on"
+                  fontSize: Style.font.caption
+                  fontFamily: root.bar.fontFamily
+                  foreground: root.bar.foreground
+                  bordered: true
+                  horizontalPadding: Style.space(10)
+                  verticalPadding: Style.space(3)
+                  onClicked: root.enableAt(index)
+                }
+              }
+            }
+
+            Text {
+              visible: root.disabledCount < 1 && root.detectNote !== ""
+              width: parent.width
+              text: root.detectNote
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.space(6)
 
             Item {
               id: canvas
               width: parent.width
               implicitHeight: Style.space(168)
+              clip: true
 
               readonly property int pad: Style.space(16)
               readonly property var box: Model.bounds(root.monitors)
@@ -574,17 +816,18 @@ Panel {
               }
 
               Repeater {
-                model: root.monitors
+                model: root.monitors.length
 
                 Rectangle {
-                  required property var modelData
                   required property int index
-                  visible: modelData.enabled
-                  x: canvas.cx(modelData.x)
-                  y: canvas.cy(modelData.y)
-                  width: canvas.cw(modelData.logicalW)
-                  height: canvas.ch(modelData.logicalH)
+                  readonly property var mon: root.monitors[index]
+                  visible: !!mon
+                  x: mon ? canvas.cx(mon.x) : 0
+                  y: mon ? canvas.cy(mon.y) : 0
+                  width: mon ? canvas.cw(mon.logicalW) : 0
+                  height: mon ? canvas.ch(mon.logicalH) : 0
                   radius: Math.max(2, Style.cornerRadius)
+                  opacity: mon && mon.enabled ? 1 : 0.7
                   color: {
                     if (root.identifying && index === root.selectedIndex)
                       return Util.alpha(Color.accent, 0.35)
@@ -595,7 +838,7 @@ Panel {
                   border.width: index === root.selectedIndex ? 2 : 1
                   border.color: index === root.selectedIndex
                     ? Util.alpha(Color.accent, 0.95)
-                    : Util.alpha(root.bar.foreground, 0.28)
+                    : Util.alpha(root.bar.foreground, mon && mon.enabled ? 0.28 : 0.45)
 
                   Column {
                     anchors.centerIn: parent
@@ -614,11 +857,21 @@ Panel {
                     Text {
                       width: parent.width
                       horizontalAlignment: Text.AlignHCenter
-                      text: modelData.label
+                      text: mon ? mon.label : ""
                       color: Qt.darker(root.bar.foreground, 1.25)
                       font.family: root.bar.fontFamily
                       font.pixelSize: Style.font.caption
                       elide: Text.ElideRight
+                    }
+
+                    Text {
+                      visible: !!(mon && !mon.enabled)
+                      anchors.horizontalCenter: parent.horizontalCenter
+                      text: "Off"
+                      color: Qt.darker(root.bar.foreground, 1.35)
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
                     }
                   }
                 }
@@ -653,7 +906,6 @@ Panel {
                 function hit(mx, my) {
                   for (var i = root.monitors.length - 1; i >= 0; i--) {
                     var m = root.monitors[i]
-                    if (!m.enabled) continue
                     var rx = canvas.cx(m.x), ry = canvas.cy(m.y)
                     var rw = canvas.cw(m.logicalW), rh = canvas.ch(m.logicalH)
                     if (mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh) return i
@@ -865,12 +1117,24 @@ Panel {
               label: "Enable this Display"
               description: root.enabledCount <= 1 && root.selected && root.selected.enabled
                 ? "Keep at least one screen on"
-                : "Include this screen in the layout"
+                : root.selectedSecondaryGpu
+                  ? "May stay blank until a Hyprland restart or system reboot"
+                  : "Include this screen in the layout"
               checked: !!(root.selected && root.selected.enabled)
               enabled: !(root.enabledCount <= 1 && root.selected && root.selected.enabled)
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
               onClicked: root.setEnabled(!(root.selected && root.selected.enabled))
+            }
+
+            Text {
+              visible: root.selectedSecondaryGpu
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: "This output is on a non-primary GPU. Disable can leave it blank until a Hyprland restart or a system reboot. Detect can still find it."
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
             }
 
             Button {
@@ -943,6 +1207,23 @@ Panel {
           font.pixelSize: Style.font.body
         }
       }
+    }
+  }
+
+  Variants {
+    model: Quickshell.screens
+
+    PanelWindow {
+      required property var modelData
+      screen: modelData
+      visible: root.isStandbyScreen(modelData ? modelData.name : "")
+      color: "black"
+      anchors { top: true; bottom: true; left: true; right: true }
+      exclusionMode: ExclusionMode.Ignore
+      mask: Region {}
+      WlrLayershell.namespace: "im0001gt.screens-standby"
+      WlrLayershell.layer: WlrLayer.Overlay
+      WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
     }
   }
 }

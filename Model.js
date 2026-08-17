@@ -30,7 +30,8 @@ function clone(monitors) {
       physicalW: m.physicalW,
       physicalH: m.physicalH,
       identity: m.identity,
-      mirror: m.mirror || ""
+      mirror: m.mirror || "",
+      secondaryGpu: !!m.secondaryGpu
     })
   }
   return out
@@ -83,7 +84,7 @@ function logicalH(m) {
 }
 
 function bounds(monitors) {
-  var list = enabledOnly(monitors)
+  var list = monitors || []
   if (!list.length) return { x: 0, y: 0, w: 1920, h: 1080 }
   var minX = list[0].x, minY = list[0].y
   var maxX = list[0].x + logicalW(list[0])
@@ -193,17 +194,15 @@ function snapMove(monitors, index, x, y, threshold) {
 }
 
 function normalizeOrigin(monitors) {
-  var list = enabledOnly(monitors)
-  if (!list.length) return monitors
-  var minX = list[0].x
-  var minY = list[0].y
-  for (var i = 1; i < list.length; i++) {
-    minX = Math.min(minX, list[i].x)
-    minY = Math.min(minY, list[i].y)
+  if (!monitors || !monitors.length) return monitors
+  var minX = monitors[0].x
+  var minY = monitors[0].y
+  for (var i = 1; i < monitors.length; i++) {
+    minX = Math.min(minX, monitors[i].x)
+    minY = Math.min(minY, monitors[i].y)
   }
   if (minX === 0 && minY === 0) return monitors
   for (var j = 0; j < monitors.length; j++) {
-    if (!monitors[j].enabled) continue
     monitors[j].x -= minX
     monitors[j].y -= minY
   }
@@ -284,6 +283,7 @@ function heroStatus(mon, profileName) {
   if (!mon) return "No displays"
   var bits = []
   if (profileName) bits.push(profileName)
+  if (!mon.enabled) bits.push("Off")
   var res = resolutionOf(mon.mode)
   if (res) bits.push(res.replace("x", "×"))
   var hz = Number(mon.refresh)

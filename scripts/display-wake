@@ -1,0 +1,7 @@
+#!/bin/bash
+# After idle/sleep, turn outputs back on. Does not restart Hyprland.
+set -euo pipefail
+
+hyprctl eval 'hl.dispatch(hl.dsp.dpms({ action = "enable" }))' >/dev/null 2>&1 || true
+hyprctl eval 'hl.dispatch(hl.dsp.force_renderer_reload())' >/dev/null 2>&1 || true
+exit 0

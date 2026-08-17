@@ -63,6 +63,10 @@ copy_plugin_files() {
   install -m 0644 "$SCRIPT_DIR/ScreenMark.qml" "$plugin_dir/ScreenMark.qml"
   install -m 0644 "$SCRIPT_DIR/Model.js" "$plugin_dir/Model.js"
   install -m 0755 "$SCRIPT_DIR/scripts/display-ctl" "$plugin_dir/scripts/display-ctl"
+  install -m 0755 "$SCRIPT_DIR/scripts/omarchy-brightness-display" "$plugin_dir/scripts/omarchy-brightness-display"
+  install -m 0755 "$SCRIPT_DIR/scripts/display-wake" "$plugin_dir/scripts/display-wake" 2>/dev/null || true
+  mkdir -p "$real_home/.local/bin"
+  ln -sfn "$plugin_dir/scripts/omarchy-brightness-display" "$real_home/.local/bin/omarchy-brightness-display"
   chown -R "$real_user:" "$plugin_dir" 2>/dev/null || true
 }
 

@@ -2,7 +2,7 @@
 
 An Omarchy bar widget that treats the desk as a layout, not a list of percentages.
 
-Click the two-tile mark for a Power-style panel that stays open. Displays are drawn at their real Hyprland size. Drag them and they **snap flush** — no overlapping tiles, no cursor-eating gaps. Then set refresh, HDR, VRR, scale, rotation, and mirroring on the selected screen. Save the desk as a named **profile**; Screens can restore it when a display is plugged in.
+Click the two-tile mark for a panel that stays open. Displays are drawn at their real Hyprland size. Drag them and they **snap flush** — no overlapping tiles, no cursor-eating gaps. Then set refresh, HDR, VRR, scale, rotation, and mirroring on the selected screen. Save the desk as a named **profile**; Screens can restore it when a display is plugged in.
 
 Stock **Display** stays put (brightness and text size). Screens uses a different icon on purpose.
 
@@ -12,13 +12,13 @@ Stock **Display** stays put (brightness and text size). Screens uses a different
 
 | Click | Drag | Per screen | Profiles |
 | --- | --- | --- | --- |
-| Open the panel | Snap tiles to neighboring edges | Resolution, Hz, HDR, four VRR modes, scale, rotation, mirror, enable | Name a desk, restore it on connect |
+| Open the panel | Snap tiles to neighboring edges | Resolution, Hz, HDR, four VRR modes, scale, rotation, mirror, Detect | Name a desk, restore it on connect |
 
 Works with two screens or a full battlestation. A fallback Hyprland rule still catches anything you hot-plug later.
 
 ## Why this exists
 
-Omarchy Quattro's Display widget does brightness, text size, and scale. It does not arrange monitors or expose HDMI 2.1 features.
+Omarchy's Display widget does brightness, text size, and scale. It does not arrange monitors or expose HDMI 2.1 features.
 
 Other listed tools cover adjacent jobs:
 
@@ -51,14 +51,23 @@ cd omarchy-screens
 - **Click** the two-tile icon — the panel stays open until you click away
 - **Drag** a tile — edges snap so the cursor never falls in a gap
 - **Find** — badge on the *selected* output (not only the screen that holds the menu)
+- **Detect** — rescan Hyprland and DRM for a plugged-in screen that is currently off, then **Turn on**. If it is listed but stays blank, restart Hyprland or the machine
+- **Enable this Display** turns a screen off. On a non-primary GPU that can leave the panel blank until Hyprland or a reboot; Detect still finds it
 - Pick a screen, then set **resolution**, **refresh**, **HDR**, **VRR**, **scale**, **orientation**, or **mirror**
-- **Save** names the current layout. Two or more profiles become a dropdown. **On connect** reapplies a matching profile when a display is plugged in
+- **Save** names the current layout. Click the profile name (or **Apply**) to write it. Two or more profiles become a dropdown. **On connect** reapplies a matching profile when a display is plugged in
+- Turning a display on, or turning **Mirror** off, restores the matching saved layout instead of leaving tiles stacked
 - Labels use Hyprland's model string. HDR and VRR disable themselves when that panel cannot do them
 - **Make primary** chooses which screen the panel prefers when it opens
 
-Changes write `~/.config/hypr/monitors.lua` after you drag, toggle, or save. Backups and profiles land in `~/.local/state/im0001gt.screens/`. Stock Omarchy monitor files are replaced; other custom files keep their text and get a managed block appended.
+Changes write `~/.config/hypr/monitors.lua` after you drag, turn a display on, or save. Backups and profiles land in `~/.local/state/im0001gt.screens/`. Stock Omarchy monitor files are replaced; other custom files keep their text and get a managed block appended.
 
 Move it with `omarchy bar move im0001gt.screens`.
+
+## Multi-GPU desks
+
+If Hyprland is painting on one GPU and another panel is plugged into a second GPU, idle standby or **Enable this Display** off can leave that output blank until Hyprland or a reboot. Screens only Hyprland-DPMS the **primary** GPU on idle; any display on another GPU stays on but black. Detect can still find a disabled output. A one-time note appears the first time you open the panel.
+
+Resolution lists come from Hyprland / the EDID. A DP-to-DVI adapter that only advertises 2560×1440@60 will only show that mode.
 
 ## Update
 
