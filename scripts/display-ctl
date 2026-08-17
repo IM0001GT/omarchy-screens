@@ -815,12 +815,21 @@ def sanitize_monitor(mon, known_names=None):
     }
 
 
+INTERNAL_PANEL_RE = re.compile(r"^(eDP|LVDS|DSI)", re.I)
+
+
 def output_ref(mon, used_desc):
+    name = clean_connector(mon.get("name"))
+    # omarchy-hyprland-monitor-clamshell only reads the internal panel's rule
+    # when it is keyed by connector name. Behind a desc: key it finds no scale,
+    # falls back to 2, and re-applies it every 2s while docked.
+    if name and INTERNAL_PANEL_RE.match(name):
+        return name
     desc = clean_desc(mon.get("description") or "")
     if desc and desc not in used_desc:
         used_desc.add(desc)
         return "desc:%s" % desc
-    return clean_connector(mon.get("name")) or "Unknown"
+    return name or "Unknown"
 
 
 def monitor_lua(mon, used_desc):
