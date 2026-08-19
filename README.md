@@ -5,7 +5,7 @@ An Omarchy bar widget for arranging displays and setting how they look.
 Click the two-tile mark for a panel that stays open. Displays are drawn at their real Hyprland size. Drag them and they **snap flush** — no overlapping tiles, no cursor-eating gaps. Then set brightness, text size, resolution, refresh, HDR, VRR, scale, rotation, and mirroring. Save the desk as a named **profile**; Screens can restore it when a display is plugged in.
 
 <p align="center">
-  <img width="497" height="761" alt="Screens panel" src="https://github.com/user-attachments/assets/94012df0-bf3a-4e7d-bfcc-08cee6dfcb16" />
+  <img width="960" alt="Screens" src="preview.png" />
 </p>
 
 | Layout | This screen | HDR | Profiles |
