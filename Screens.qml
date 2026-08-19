@@ -52,6 +52,9 @@ Panel {
   property bool brightnessAvailable: false
   property int textSizePreviewIndex: -1
   property bool reflowingText: false
+  property bool lastDisplayBounce: false
+  property int lastDisplayQuipIndex: 0
+  property string lastDisplayQuip: ""
   readonly property var textSizeStops: [9, 10, 11, 12, 14, 16, 20]
 
   readonly property var selected: {
@@ -367,7 +370,15 @@ Panel {
   }
 
   function setEnabled(on) {
-    if (!on && root.enabledCount <= 1) return
+    if (!on && root.enabledCount <= 1) {
+      root.lastDisplayBounce = true
+      root.lastDisplayQuip = Model.lastDisplayQuip(root.lastDisplayQuipIndex)
+      root.lastDisplayQuipIndex = root.lastDisplayQuipIndex + 1
+      lastDisplayBounceTimer.restart()
+      return
+    }
+    root.lastDisplayBounce = false
+    root.lastDisplayQuip = ""
     root.userPicked = true
     if (!on && root.selectedSecondaryGpu) {
       root.detectNote = "If this panel stays blank after you turn it back on, restart Hyprland or the machine."
@@ -531,6 +542,8 @@ Panel {
       return
     }
     root.userPicked = false
+    root.lastDisplayBounce = false
+    root.lastDisplayQuip = ""
     refresh()
   }
 
@@ -559,6 +572,12 @@ Panel {
     id: identifyTimer
     interval: 2200
     onTriggered: root.identifying = false
+  }
+
+  Timer {
+    id: lastDisplayBounceTimer
+    interval: 220
+    onTriggered: root.lastDisplayBounce = false
   }
 
   Process {
@@ -1756,13 +1775,14 @@ Panel {
             Toggle {
               width: parent.width
               label: "Enable this Display"
-              description: root.enabledCount <= 1 && root.selected && root.selected.enabled
-                ? "Keep at least one screen on"
-                : root.selectedSecondaryGpu
-                  ? "May stay blank until a Hyprland restart or system reboot"
-                  : "Include this screen in the layout"
-              checked: !!(root.selected && root.selected.enabled)
-              enabled: !(root.enabledCount <= 1 && root.selected && root.selected.enabled)
+              description: root.lastDisplayQuip !== ""
+                ? root.lastDisplayQuip
+                : root.enabledCount <= 1 && root.selected && root.selected.enabled
+                  ? "Keep at least one screen on"
+                  : root.selectedSecondaryGpu
+                    ? "May stay blank until a Hyprland restart or system reboot"
+                    : "Include this screen in the layout"
+              checked: !!(root.selected && root.selected.enabled) && !root.lastDisplayBounce
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
               onClicked: root.setEnabled(!(root.selected && root.selected.enabled))

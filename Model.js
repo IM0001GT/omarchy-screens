@@ -360,6 +360,26 @@ function clampBrightness(value) {
   return Math.max(1, Math.min(100, Math.round(n)))
 }
 
+function lastDisplayQuip(index) {
+  var lines = [
+    "Nice try",
+    "Someone has to stay awake",
+    "This one pays the rent",
+    "The void isn't a display",
+    "Can't leave you in the dark",
+    "This screen has tenure",
+    "No black hole today",
+    "Keep the porch light on",
+    "The desktop needs a home",
+    "One window, minimum"
+  ]
+  var n = lines.length
+  var i = Math.round(Number(index))
+  if (!isFinite(i)) i = 0
+  i = ((i % n) + n) % n
+  return lines[i]
+}
+
 function brightnessName(percent) {
   var p = Math.round(percent)
   if (p >= 95) return "Sun blast"
@@ -409,6 +429,7 @@ if (typeof module !== "undefined") {
     defaultSdrBrightness: defaultSdrBrightness,
     defaultSdrPeak: defaultSdrPeak,
     clampBrightness: clampBrightness,
-    brightnessName: brightnessName
+    brightnessName: brightnessName,
+    lastDisplayQuip: lastDisplayQuip
   }
 }
