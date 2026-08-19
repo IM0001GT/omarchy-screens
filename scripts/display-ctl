@@ -1080,11 +1080,7 @@ def write_original_backup(text):
 
 
 def ensure_original_backup(text=None):
-    """Keep the first unmanaged monitors.lua forever. Never overwrite it.
-
-    Rolling apply backups are separate and get pruned. This file survives
-    plugin remove so someone can go back to the layout they had before Screens.
-    """
+    """Snapshot monitors.lua once, before Screens writes it. Never overwrite."""
     if os.path.isfile(ORIGINAL_BACKUP):
         return False
     if text is None:

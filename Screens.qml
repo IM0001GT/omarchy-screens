@@ -46,6 +46,13 @@ Panel {
   property bool hybridGpus: false
   property bool showHybridNotice: false
   property bool hdrTuning: false
+  property int brightnessPercent: 0
+  property int pendingBrightnessPercent: 0
+  property bool brightnessSetQueued: false
+  property bool brightnessAvailable: false
+  property int textSizePreviewIndex: -1
+  property bool reflowingText: false
+  readonly property var textSizeStops: [9, 10, 11, 12, 14, 16, 20]
 
   readonly property var selected: {
     if (selectedIndex < 0 || selectedIndex >= monitors.length) return null
@@ -105,6 +112,77 @@ Panel {
 
   function refresh() {
     if (!stateProc.running) stateProc.running = true
+    if (root.opened) root.refreshBrightness()
+  }
+
+  function brightnessMonitor() {
+    if (root.selected && root.selected.name) return String(root.selected.name)
+    return root.barScreenName
+  }
+
+  function refreshBrightness() {
+    if (setBrightnessProc.running) return
+    if (brightnessSlider && brightnessSlider.dragging) return
+    var name = root.brightnessMonitor()
+    if (!name) {
+      root.brightnessAvailable = false
+      return
+    }
+    brightnessProc.command = ["omarchy-brightness-display", "--monitor", name]
+    if (!brightnessProc.running) brightnessProc.running = true
+  }
+
+  function setBrightness(value) {
+    var percent = Model.clampBrightness(value)
+    root.brightnessPercent = percent
+    root.pendingBrightnessPercent = percent
+    var name = root.brightnessMonitor()
+    if (!name) return
+    if (setBrightnessProc.running) {
+      root.brightnessSetQueued = true
+      return
+    }
+    root.brightnessSetQueued = false
+    setBrightnessProc.command = ["omarchy-brightness-display", "--no-osd", "--monitor", name, percent + "%"]
+    setBrightnessProc.running = true
+  }
+
+  function previewBrightness(value) {
+    root.brightnessPercent = Model.clampBrightness(value)
+    brightnessDebounce.restart()
+  }
+
+  function nearestTextStop(px) {
+    var best = 0
+    var bestDist = 1e9
+    for (var i = 0; i < root.textSizeStops.length; i++) {
+      var d = Math.abs(root.textSizeStops[i] - px)
+      if (d < bestDist) { bestDist = d; best = i }
+    }
+    return best
+  }
+
+  function currentTextIndex() {
+    return root.textSizePreviewIndex >= 0
+      ? root.textSizePreviewIndex
+      : root.nearestTextStop(Style.font.baseSize)
+  }
+
+  function displayedTextPx() {
+    return root.textSizePreviewIndex >= 0
+      ? root.textSizeStops[root.textSizePreviewIndex]
+      : Style.font.baseSize
+  }
+
+  function setTextSize(px) {
+    root.textSizePreviewIndex = root.nearestTextStop(px)
+    textScaleProc.command = ["omarchy-display-text-size", String(px)]
+    if (!textScaleProc.running) textScaleProc.running = true
+  }
+
+  function markReflowing() {
+    root.reflowingText = true
+    reflowSettle.restart()
   }
 
   function adopt(data) {
@@ -216,8 +294,7 @@ Panel {
       if (Number(m.bitdepth) !== 8 && Number(m.bitdepth) !== 10)
         m.bitdepth = capable
       if (m.cm !== "hdr" && m.cm !== "hdredid") m.cm = "hdr"
-      // Hyprland's 0.2 nits SDR black floor is the IPS-like glow. 0.005 is
-      // the wiki's true-black mapping; keep a user-tuned value if present.
+      // Hyprland default sdr_min_luminance is 0.2; 0.005 maps SDR black to the panel.
       if (m.sdrMinLuminance === undefined || m.sdrMinLuminance === null
           || Number(m.sdrMinLuminance) >= 0.199)
         m.sdrMinLuminance = 0.005
@@ -439,6 +516,8 @@ Panel {
     refresh()
   }
 
+  onSelectedIndexChanged: if (root.opened) root.refreshBrightness()
+
   IpcHandler {
     enabled: root.isFocusedBar
     target: "im0001gt.screens"
@@ -513,6 +592,58 @@ Panel {
         try { root.adopt(JSON.parse(text)) }
         catch (e) { root.refresh() }
       }
+    }
+  }
+
+  Process {
+    id: brightnessProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (brightnessSlider && brightnessSlider.dragging) return
+        var line = String(text || "").trim().split("\n")[0]
+        var n = parseInt(line, 10)
+        root.brightnessAvailable = line !== "" && line !== "unavailable" && isFinite(n)
+        if (root.brightnessAvailable) root.brightnessPercent = Math.max(0, Math.min(100, n))
+      }
+    }
+  }
+
+  Timer {
+    id: brightnessDebounce
+    interval: 180
+    repeat: false
+    onTriggered: root.setBrightness(root.brightnessPercent)
+  }
+
+  Process {
+    id: setBrightnessProc
+    stdout: StdioCollector { waitForEnd: true }
+    onRunningChanged: {
+      if (running) return
+      if (root.brightnessSetQueued) root.setBrightness(root.pendingBrightnessPercent)
+    }
+  }
+
+  Process {
+    id: textScaleProc
+    stdout: StdioCollector { waitForEnd: true }
+  }
+
+  Timer {
+    id: reflowSettle
+    interval: 300
+    repeat: false
+    onTriggered: root.reflowingText = false
+  }
+
+  Connections {
+    target: Style
+    function onFontBaseSizeChanged() {
+      root.markReflowing()
+      if (root.textSizePreviewIndex >= 0
+          && root.nearestTextStop(Style.font.baseSize) === root.textSizePreviewIndex)
+        root.textSizePreviewIndex = -1
     }
   }
 
@@ -602,6 +733,8 @@ Panel {
 
               Text {
                 text: (root.dragging ? "Snapping edges"
+                  : (brightnessSlider && brightnessSlider.dragging)
+                    ? Model.brightnessName(brightnessSlider.liveValue)
                   : root.detectNote ? root.detectNote
                   : Model.heroStatus(root.selected, root.activeProfile)).toUpperCase()
                 color: Qt.darker(root.bar.foreground, 1.4)
@@ -1097,6 +1230,98 @@ Panel {
             }
 
             Column {
+              visible: root.brightnessAvailable
+              width: parent.width
+              spacing: Style.space(6)
+
+              Item {
+                width: parent.width
+                implicitHeight: Math.max(brightnessHeader.implicitHeight, brightnessPercentLabel.implicitHeight)
+
+                PanelSectionHeader {
+                  id: brightnessHeader
+                  text: "BRIGHTNESS"
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  id: brightnessPercentLabel
+                  text: Math.round(brightnessSlider.dragging ? brightnessSlider.liveValue : root.brightnessPercent) + "%"
+                  color: Qt.darker(root.bar.foreground, 1.4)
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+
+              PanelSlider {
+                id: brightnessSlider
+                width: parent.width
+                bar: root.bar
+                minimum: 1
+                maximum: 100
+                step: 1
+                value: root.brightnessPercent
+                integer: true
+                onMoved: function(v) { root.previewBrightness(v) }
+                onReleased: function(v) {
+                  brightnessDebounce.stop()
+                  root.setBrightness(v)
+                }
+              }
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Item {
+                width: parent.width
+                implicitHeight: Math.max(textSizeHeader.implicitHeight, textSizePx.implicitHeight)
+
+                PanelSectionHeader {
+                  id: textSizeHeader
+                  text: "TEXT SIZE"
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  id: textSizePx
+                  text: (textSizeSlider.dragging
+                    ? root.textSizeStops[Math.round(textSizeSlider.liveValue)]
+                    : root.displayedTextPx()) + "px"
+                  color: Qt.darker(root.bar.foreground, 1.4)
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+
+              PanelSlider {
+                id: textSizeSlider
+                width: parent.width
+                bar: root.bar
+                minimum: 0
+                maximum: root.textSizeStops.length - 1
+                step: 1
+                integer: true
+                tickCount: root.textSizeStops.length
+                value: root.currentTextIndex()
+                onReleased: function(v) { root.setTextSize(root.textSizeStops[Math.round(v)]) }
+              }
+            }
+
+            Column {
               id: scaleSection
               width: parent.width
               spacing: Style.space(4)
@@ -1243,8 +1468,8 @@ Panel {
                     width: parent.width
                     wrapMode: Text.WordWrap
                     text: Number(root.selected && root.selected.bitdepthCapable) === 8
-                      ? "This EDID looks 8-bit. 10-bit may still work over DP, or break capture."
-                      : "10-bit is the usual HDR output. Switch to 8-bit if capture tools go black."
+                      ? "EDID reports 8-bit. 10-bit may still work on DisplayPort."
+                      : "10-bit HDR. Use 8-bit if screen capture fails."
                     color: Qt.darker(root.bar.foreground, 1.4)
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.caption
@@ -1334,7 +1559,7 @@ Panel {
                   Text {
                     width: parent.width
                     wrapMode: Text.WordWrap
-                    text: "Lower is true black. Hyprland defaults to 0.200, which lifts dark scenes."
+                    text: "Lower maps SDR black closer to the panel. Enabling HDR sets 0.005 nits."
                     color: Qt.darker(root.bar.foreground, 1.4)
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.caption
@@ -1390,7 +1615,7 @@ Panel {
                   Text {
                     width: parent.width
                     wrapMode: Text.WordWrap
-                    text: "SDR content in HDR mode. 200–250 is typical; 80 is Hyprland's stock peak."
+                    text: "SDR white level while HDR is on. Typical range 200–250 nits."
                     color: Qt.darker(root.bar.foreground, 1.4)
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.caption

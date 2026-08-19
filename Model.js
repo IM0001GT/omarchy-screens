@@ -327,6 +327,24 @@ function hdrDescription(mon) {
   return bits + " " + cm
 }
 
+function clampBrightness(value) {
+  var n = Number(value)
+  if (!isFinite(n)) return 1
+  return Math.max(1, Math.min(100, Math.round(n)))
+}
+
+function brightnessName(percent) {
+  var p = Math.round(percent)
+  if (p >= 95) return "Sun blast"
+  if (p >= 80) return "Solar flare"
+  if (p >= 65) return "Golden hour"
+  if (p >= 45) return "Even day"
+  if (p >= 30) return "Soft glow"
+  if (p >= 20) return "Lamp light"
+  if (p >= 10) return "Candlelit"
+  return "Night owl"
+}
+
 function defaultSdrPeak(mon) {
   var avg = Number(mon && mon.maxAvgLuminance)
   if (isFinite(avg) && avg >= 80 && avg <= 400) return Math.round(avg)
@@ -359,6 +377,8 @@ if (typeof module !== "undefined") {
     pickMode: pickMode,
     heroStatus: heroStatus,
     hdrDescription: hdrDescription,
-    defaultSdrPeak: defaultSdrPeak
+    defaultSdrPeak: defaultSdrPeak,
+    clampBrightness: clampBrightness,
+    brightnessName: brightnessName
   }
 }

@@ -131,7 +131,8 @@ reload_shell
 echo
 echo "Done. Screens is a bar widget — click the two-tile icon."
 echo "  Drag tiles to arrange. They snap flush."
-echo "  Per screen: resolution, refresh, HDR, VRR, scale, rotation."
+echo "  Per screen: brightness, resolution, refresh, HDR, VRR, scale, rotation."
+echo "  Desktop: text size."
 echo "  Uninstall: omarchy plugin remove $PLUGIN_ID"
-echo "  Restore the monitors.lua from before Screens:"
+echo "  Restore pre-Screens monitors.lua:"
 echo "    $plugin_dir/scripts/display-ctl restore-original"
