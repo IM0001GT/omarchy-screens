@@ -27,6 +27,8 @@ function clone(monitors) {
       bitdepthCapable: m.bitdepthCapable,
       sdrMinLuminance: m.sdrMinLuminance,
       sdrMaxLuminance: m.sdrMaxLuminance,
+      sdrBrightness: m.sdrBrightness,
+      wideGamut: !!m.wideGamut,
       minLuminance: m.minLuminance,
       maxLuminance: m.maxLuminance,
       maxAvgLuminance: m.maxAvgLuminance,
@@ -234,6 +236,7 @@ function applyPayload(monitors) {
       cm: m.cm,
       sdrMinLuminance: m.sdrMinLuminance,
       sdrMaxLuminance: m.sdrMaxLuminance,
+      sdrBrightness: m.sdrBrightness,
       minLuminance: m.minLuminance,
       maxLuminance: m.maxLuminance,
       enabled: !!m.enabled,
@@ -323,8 +326,19 @@ function mirrorOptions(monitors, selected) {
 function hdrDescription(mon) {
   if (!mon) return "PQ"
   var bits = Number(mon.bitdepth) === 8 ? "8-bit" : "10-bit"
-  var cm = String(mon.cm || "") === "hdredid" ? "PQ · EDID" : "PQ"
+  var cm = String(mon.cm || "") === "hdredid" ? "PQ · display" : "PQ · BT.2020"
   return bits + " " + cm
+}
+
+function defaultHdrCm(mon) {
+  return (mon && mon.wideGamut) ? "hdr" : "hdredid"
+}
+
+function defaultSdrBrightness(mon) {
+  if (mon && mon.wideGamut) return 1.0
+  var peak = Number(mon && mon.maxLuminance)
+  if (isFinite(peak) && peak >= 600) return 1.0
+  return 1.2
 }
 
 function clampBrightness(value) {
@@ -377,6 +391,8 @@ if (typeof module !== "undefined") {
     pickMode: pickMode,
     heroStatus: heroStatus,
     hdrDescription: hdrDescription,
+    defaultHdrCm: defaultHdrCm,
+    defaultSdrBrightness: defaultSdrBrightness,
     defaultSdrPeak: defaultSdrPeak,
     clampBrightness: clampBrightness,
     brightnessName: brightnessName

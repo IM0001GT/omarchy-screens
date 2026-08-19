@@ -84,8 +84,8 @@ Panel {
     { value: "10", label: "10-bit" }
   ]
   readonly property var hdrCmOptions: [
-    { value: "hdr", label: "HDR PQ" },
-    { value: "hdredid", label: "HDR EDID" }
+    { value: "hdredid", label: "Display" },
+    { value: "hdr", label: "Wide" }
   ]
   readonly property string barScreenName: {
     var win = button.QsWindow ? button.QsWindow.window : null
@@ -293,13 +293,16 @@ Panel {
       var capable = Number(m.bitdepthCapable) === 8 ? 8 : 10
       if (Number(m.bitdepth) !== 8 && Number(m.bitdepth) !== 10)
         m.bitdepth = capable
-      if (m.cm !== "hdr" && m.cm !== "hdredid") m.cm = "hdr"
-      // Hyprland default sdr_min_luminance is 0.2; 0.005 maps SDR black to the panel.
+      // Limited HDR LCDs look dull in BT.2020; use the panel's EDID primaries.
+      if (!m.wideGamut) m.cm = "hdredid"
+      else if (m.cm !== "hdr" && m.cm !== "hdredid") m.cm = "hdr"
       if (m.sdrMinLuminance === undefined || m.sdrMinLuminance === null
           || Number(m.sdrMinLuminance) >= 0.199)
         m.sdrMinLuminance = 0.005
       if (!m.sdrMaxLuminance || Number(m.sdrMaxLuminance) <= 80)
         m.sdrMaxLuminance = Model.defaultSdrPeak(m)
+      if (!m.sdrBrightness || Number(m.sdrBrightness) <= 1)
+        m.sdrBrightness = Model.defaultSdrBrightness(m)
       if (m.minLuminance === undefined || Number(m.minLuminance) < 0)
         m.minLuminance = 0
     })
@@ -330,6 +333,14 @@ Panel {
     if (!root.selected) return
     var next = Model.clone(root.monitors)
     next[root.selectedIndex].sdrMaxLuminance = Math.max(40, Math.min(400, Math.round(Number(value))))
+    root.monitors = next
+    if (apply) applyNow()
+  }
+
+  function setSdrBrightness(value, apply) {
+    if (!root.selected) return
+    var next = Model.clone(root.monitors)
+    next[root.selectedIndex].sdrBrightness = Math.max(0.8, Math.min(2.0, Math.round(Number(value) * 20) / 20))
     root.monitors = next
     if (apply) applyNow()
   }
@@ -1415,7 +1426,7 @@ Panel {
                   active: root.hdrTuning
                   horizontalPadding: Style.space(10)
                   verticalPadding: Style.space(4)
-                  tooltipText: "8-bit / 10-bit, primaries, and black / peak brightness"
+                  tooltipText: "Bit depth, color space, and SDR brightness in HDR"
                   onClicked: {
                     root.hdrTuning = !root.hdrTuning
                     if (root.hdrTuning)
@@ -1481,7 +1492,7 @@ Panel {
                   spacing: Style.space(4)
 
                   PanelSectionHeader {
-                    text: "PRIMARIES"
+                    text: "COLOR SPACE"
                     foreground: root.bar.foreground
                     fontFamily: root.bar.fontFamily
                   }
@@ -1508,6 +1519,72 @@ Panel {
                         onClicked: root.setHdrCm(modelData.value)
                       }
                     }
+                  }
+
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: root.selected && root.selected.wideGamut
+                      ? "Wide is BT.2020. Display uses this panel's measured colors."
+                      : "Display matches this LCD. Wide (BT.2020) often looks dull here."
+                    color: Qt.darker(root.bar.foreground, 1.4)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+
+                Column {
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  Item {
+                    width: parent.width
+                    implicitHeight: Math.max(sdrBrightHeader.implicitHeight, sdrBrightValue.implicitHeight)
+
+                    PanelSectionHeader {
+                      id: sdrBrightHeader
+                      text: "SDR BRIGHTNESS"
+                      foreground: root.bar.foreground
+                      fontFamily: root.bar.fontFamily
+                      anchors.left: parent.left
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                      id: sdrBrightValue
+                      text: {
+                        var n = root.selected ? Number(root.selected.sdrBrightness) : 1.0
+                        if (!isFinite(n) || n <= 0) n = 1.0
+                        return n.toFixed(2) + "×"
+                      }
+                      color: Qt.darker(root.bar.foreground, 1.4)
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                      anchors.right: parent.right
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+                  }
+
+                  PanelSlider {
+                    width: parent.width
+                    bar: root.bar
+                    minimum: 0.8
+                    maximum: 2.0
+                    step: 0.05
+                    value: root.selected && isFinite(Number(root.selected.sdrBrightness)) && Number(root.selected.sdrBrightness) > 0
+                      ? Number(root.selected.sdrBrightness) : 1.0
+                    onMoved: function(v) { root.setSdrBrightness(v, false) }
+                    onReleased: function(v) { root.setSdrBrightness(v, true) }
+                  }
+
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "Raises the desktop and other SDR apps while HDR is on. Start around 1.2 on LCDs."
+                    color: Qt.darker(root.bar.foreground, 1.4)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
                   }
                 }
 
