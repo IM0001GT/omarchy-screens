@@ -45,6 +45,7 @@ Panel {
   property var standbyNames: []
   property bool hybridGpus: false
   property bool showHybridNotice: false
+  property bool hdrTuning: false
 
   readonly property var selected: {
     if (selectedIndex < 0 || selectedIndex >= monitors.length) return null
@@ -70,6 +71,14 @@ Panel {
     { value: "1", label: "Always" },
     { value: "2", label: "Fullscreen" },
     { value: "3", label: "Games & video" }
+  ]
+  readonly property var bitdepthOptions: [
+    { value: "8", label: "8-bit" },
+    { value: "10", label: "10-bit" }
+  ]
+  readonly property var hdrCmOptions: [
+    { value: "hdr", label: "HDR PQ" },
+    { value: "hdredid", label: "HDR EDID" }
   ]
   readonly property string barScreenName: {
     var win = button.QsWindow ? button.QsWindow.window : null
@@ -183,6 +192,7 @@ Panel {
 
   function setScale(scale) {
     mutateSelected(function(m) { m.scale = Number(scale) })
+    Qt.callLater(function() { root.revealItem(scaleSection) })
   }
 
   function setTransform(value) {
@@ -199,7 +209,66 @@ Panel {
 
   function setHdr(on) {
     if (!root.selectedHdrOk) return
-    mutateSelected(function(m) { m.hdr = !!on })
+    mutateSelected(function(m) {
+      m.hdr = !!on
+      if (!on) return
+      var capable = Number(m.bitdepthCapable) === 8 ? 8 : 10
+      if (Number(m.bitdepth) !== 8 && Number(m.bitdepth) !== 10)
+        m.bitdepth = capable
+      if (m.cm !== "hdr" && m.cm !== "hdredid") m.cm = "hdr"
+      // Hyprland's 0.2 nits SDR black floor is the IPS-like glow. 0.005 is
+      // the wiki's true-black mapping; keep a user-tuned value if present.
+      if (m.sdrMinLuminance === undefined || m.sdrMinLuminance === null
+          || Number(m.sdrMinLuminance) >= 0.199)
+        m.sdrMinLuminance = 0.005
+      if (!m.sdrMaxLuminance || Number(m.sdrMaxLuminance) <= 80)
+        m.sdrMaxLuminance = Model.defaultSdrPeak(m)
+      if (m.minLuminance === undefined || Number(m.minLuminance) < 0)
+        m.minLuminance = 0
+    })
+    if (on) Qt.callLater(function() { root.revealItem(hdrTuneSection.visible ? hdrTuneSection : hdrRow) })
+  }
+
+  function setBitdepth(value) {
+    if (!root.selectedHdrOk) return
+    var n = parseInt(value, 10) === 8 ? 8 : 10
+    mutateSelected(function(m) { m.bitdepth = n })
+  }
+
+  function setHdrCm(value) {
+    if (!root.selectedHdrOk) return
+    var cm = String(value) === "hdredid" ? "hdredid" : "hdr"
+    mutateSelected(function(m) { m.cm = cm })
+  }
+
+  function setSdrMin(value, apply) {
+    if (!root.selected) return
+    var next = Model.clone(root.monitors)
+    next[root.selectedIndex].sdrMinLuminance = Math.max(0, Math.min(0.2, Number(value)))
+    root.monitors = next
+    if (apply) applyNow()
+  }
+
+  function setSdrMax(value, apply) {
+    if (!root.selected) return
+    var next = Model.clone(root.monitors)
+    next[root.selectedIndex].sdrMaxLuminance = Math.max(40, Math.min(400, Math.round(Number(value))))
+    root.monitors = next
+    if (apply) applyNow()
+  }
+
+  function revealItem(item) {
+    if (!item || !panelFlick) return
+    if (panelFlick.contentHeight <= panelFlick.height) return
+    var y = item.mapToItem(panelFlick.contentItem, 0, 0).y
+    var h = item.height
+    var top = panelFlick.contentY
+    var bot = top + panelFlick.height
+    var margin = Style.space(8)
+    if (y < top + margin)
+      panelFlick.contentY = Math.max(0, y - margin)
+    else if (y + h > bot - margin)
+      panelFlick.contentY = Math.max(0, Math.min(panelFlick.contentHeight - panelFlick.height, y + h + margin - panelFlick.height))
   }
 
   function setEnabled(on) {
@@ -363,6 +432,7 @@ Panel {
     if (!opened) {
       root.detectNote = ""
       root.detectPending = false
+      root.hdrTuning = false
       return
     }
     root.userPicked = false
@@ -476,13 +546,27 @@ Panel {
       anchors.fill: parent
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onMoveRequested: function(dx, dy) {
+        if (!panelFlick.interactive) return
+        var step = Style.space(48)
+        var maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
+        panelFlick.contentY = Math.max(0, Math.min(maxY, panelFlick.contentY + dy * step))
+      }
 
-      Column {
-        id: panelColumn
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        spacing: Style.space(10)
+      Flickable {
+        id: panelFlick
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: panelColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+        interactive: contentHeight > height && !root.dragging
+
+        Column {
+          id: panelColumn
+          width: panelFlick.width
+          spacing: Style.space(10)
 
           Item {
             width: parent.width
@@ -1013,6 +1097,7 @@ Panel {
             }
 
             Column {
+              id: scaleSection
               width: parent.width
               spacing: Style.space(4)
 
@@ -1074,15 +1159,244 @@ Panel {
               }
             }
 
-            Toggle {
-              visible: root.selectedHdrOk
+            Column {
+              id: hdrRow
               width: parent.width
-              label: "HDR"
-              description: "10-bit PQ"
-              checked: !!(root.selected && root.selected.hdr)
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              onClicked: root.setHdr(!(root.selected && root.selected.hdr))
+              spacing: Style.space(6)
+              visible: root.selectedHdrOk
+
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Toggle {
+                  width: parent.width - tuneBtn.width - parent.spacing
+                  label: "HDR"
+                  description: Model.hdrDescription(root.selected)
+                  checked: !!(root.selected && root.selected.hdr)
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  onClicked: root.setHdr(!(root.selected && root.selected.hdr))
+                }
+
+                Button {
+                  id: tuneBtn
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.hdrTuning ? "Done" : "Tune"
+                  fontSize: Style.font.caption
+                  fontFamily: root.bar.fontFamily
+                  foreground: root.bar.foreground
+                  bordered: true
+                  active: root.hdrTuning
+                  horizontalPadding: Style.space(10)
+                  verticalPadding: Style.space(4)
+                  tooltipText: "8-bit / 10-bit, primaries, and black / peak brightness"
+                  onClicked: {
+                    root.hdrTuning = !root.hdrTuning
+                    if (root.hdrTuning)
+                      Qt.callLater(function() { root.revealItem(hdrTuneSection) })
+                  }
+                }
+              }
+
+              Column {
+                id: hdrTuneSection
+                width: parent.width
+                spacing: Style.space(8)
+                visible: root.hdrTuning
+
+                Column {
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  PanelSectionHeader {
+                    text: "BIT DEPTH"
+                    foreground: root.bar.foreground
+                    fontFamily: root.bar.fontFamily
+                  }
+
+                  Grid {
+                    id: bitdepthRow
+                    width: parent.width
+                    columns: root.bitdepthOptions.length
+                    spacing: Style.spacing.xs
+                    readonly property real cellWidth: (width - spacing * (columns - 1)) / columns
+
+                    Repeater {
+                      model: root.bitdepthOptions
+
+                      Button {
+                        required property var modelData
+                        width: bitdepthRow.cellWidth
+                        text: modelData.label
+                        fontSize: Style.font.caption
+                        fontFamily: root.bar.fontFamily
+                        foreground: root.bar.foreground
+                        bordered: true
+                        active: root.selected && Number(root.selected.bitdepth) === Number(modelData.value)
+                        onClicked: root.setBitdepth(modelData.value)
+                      }
+                    }
+                  }
+
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: Number(root.selected && root.selected.bitdepthCapable) === 8
+                      ? "This EDID looks 8-bit. 10-bit may still work over DP, or break capture."
+                      : "10-bit is the usual HDR output. Switch to 8-bit if capture tools go black."
+                    color: Qt.darker(root.bar.foreground, 1.4)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+
+                Column {
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  PanelSectionHeader {
+                    text: "PRIMARIES"
+                    foreground: root.bar.foreground
+                    fontFamily: root.bar.fontFamily
+                  }
+
+                  Grid {
+                    id: hdrCmRow
+                    width: parent.width
+                    columns: root.hdrCmOptions.length
+                    spacing: Style.spacing.xs
+                    readonly property real cellWidth: (width - spacing * (columns - 1)) / columns
+
+                    Repeater {
+                      model: root.hdrCmOptions
+
+                      Button {
+                        required property var modelData
+                        width: hdrCmRow.cellWidth
+                        text: modelData.label
+                        fontSize: Style.font.caption
+                        fontFamily: root.bar.fontFamily
+                        foreground: root.bar.foreground
+                        bordered: true
+                        active: root.selected && String(root.selected.cm) === String(modelData.value)
+                        onClicked: root.setHdrCm(modelData.value)
+                      }
+                    }
+                  }
+                }
+
+                Column {
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  Item {
+                    width: parent.width
+                    implicitHeight: Math.max(blackHeader.implicitHeight, blackValue.implicitHeight)
+
+                    PanelSectionHeader {
+                      id: blackHeader
+                      text: "BLACK FLOOR"
+                      foreground: root.bar.foreground
+                      fontFamily: root.bar.fontFamily
+                      anchors.left: parent.left
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                      id: blackValue
+                      text: {
+                        var n = root.selected ? Number(root.selected.sdrMinLuminance) : 0.005
+                        if (!isFinite(n)) n = 0.005
+                        return n.toFixed(3) + " nits"
+                      }
+                      color: Qt.darker(root.bar.foreground, 1.4)
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                      anchors.right: parent.right
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+                  }
+
+                  PanelSlider {
+                    width: parent.width
+                    bar: root.bar
+                    minimum: 0
+                    maximum: 0.2
+                    step: 0.005
+                    value: root.selected && isFinite(Number(root.selected.sdrMinLuminance))
+                      ? Number(root.selected.sdrMinLuminance) : 0.005
+                    onMoved: function(v) { root.setSdrMin(v, false) }
+                    onReleased: function(v) { root.setSdrMin(v, true) }
+                  }
+
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "Lower is true black. Hyprland defaults to 0.200, which lifts dark scenes."
+                    color: Qt.darker(root.bar.foreground, 1.4)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+
+                Column {
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  Item {
+                    width: parent.width
+                    implicitHeight: Math.max(peakHeader.implicitHeight, peakValue.implicitHeight)
+
+                    PanelSectionHeader {
+                      id: peakHeader
+                      text: "SDR PEAK"
+                      foreground: root.bar.foreground
+                      fontFamily: root.bar.fontFamily
+                      anchors.left: parent.left
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                      id: peakValue
+                      text: {
+                        var n = root.selected ? Number(root.selected.sdrMaxLuminance) : 200
+                        if (!isFinite(n)) n = 200
+                        return Math.round(n) + " nits"
+                      }
+                      color: Qt.darker(root.bar.foreground, 1.4)
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                      anchors.right: parent.right
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+                  }
+
+                  PanelSlider {
+                    width: parent.width
+                    bar: root.bar
+                    minimum: 80
+                    maximum: 400
+                    step: 10
+                    integer: true
+                    value: root.selected && isFinite(Number(root.selected.sdrMaxLuminance))
+                      ? Number(root.selected.sdrMaxLuminance) : 200
+                    onMoved: function(v) { root.setSdrMax(v, false) }
+                    onReleased: function(v) { root.setSdrMax(v, true) }
+                  }
+
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "SDR content in HDR mode. 200–250 is typical; 80 is Hyprland's stock peak."
+                    color: Qt.darker(root.bar.foreground, 1.4)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+              }
             }
 
             Dropdown {
@@ -1154,6 +1468,7 @@ Panel {
           Item { width: parent.width; height: Style.space(8) }
         }
       }
+    }
     }
 
   PanelWindow {

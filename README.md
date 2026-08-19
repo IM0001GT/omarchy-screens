@@ -53,7 +53,9 @@ cd omarchy-screens
 - **Find** — badge on the *selected* output (not only the screen that holds the menu)
 - **Detect** — rescan Hyprland and DRM for a plugged-in screen that is currently off, then **Turn on**. If it is listed but stays blank, restart Hyprland or the machine
 - **Enable this Display** turns a screen off. On a non-primary GPU that can leave the panel blank until Hyprland or a reboot; Detect still finds it
-- Pick a screen, then set **resolution**, **refresh**, **HDR**, **VRR**, **scale**, **orientation**, or **mirror**
+- Pick a screen, then set **resolution**, **refresh**, **HDR**, **VRR**, **scale**, **orientation**, or **mirror**. If the panel is taller than the screen (2× scale on 1080p), it scrolls so every control stays reachable
+- **Tune** next to HDR picks 8-bit or 10-bit, HDR PQ vs EDID primaries, and the black-floor / SDR-peak nits. Screens reads 8-bit vs 10-bit from the EDID when it can; otherwise it defaults to 10-bit and you can switch
+- Laptop built-in panels are written as `eDP-1` / `LVDS` / `DSI` so Omarchy's clamshell helper keeps your scale instead of forcing 2
 - **Save** names the current layout. Click the profile name (or **Apply**) to write it. Two or more profiles become a dropdown. **On connect** reapplies a matching profile when a display is plugged in
 - Turning a display on, or turning **Mirror** off, restores the matching saved layout instead of leaving tiles stacked
 - Labels use Hyprland's model string. HDR and VRR disable themselves when that panel cannot do them
@@ -90,7 +92,7 @@ Your last `monitors.lua` stays in place. Backups and profiles are not deleted.
 - Hyprland 0.55+ Lua monitor config (`hl.monitor`)
 - `python3` and `jq` (already on Omarchy)
 
-HDR is 10-bit PQ (`cm = hdr`, `bitdepth = 10`). Some capture tools do not like 10-bit. VRR is Hyprland's four modes: Off, Always, Fullscreen, and Games & video. Always + HDR can flicker on some OLEDs; Fullscreen or Games & video is the usual workaround.
+Hyprland HDR is PQ (`cm = hdr` or `hdredid`) at **8-bit or 10-bit**. There is no HLG preset. Screens prefers 10-bit when the EDID advertises deep color, and 8-bit when an HDMI VSDB is present without it. **Tune** can override that, and sets SDR black to 0.005 nits (Hyprland's stock 0.2 nits is the lifted-black glow). Some capture tools do not like 10-bit. VRR is Hyprland's four modes: Off, Always, Fullscreen, and Games & video. Always + HDR can flicker on some OLEDs; Fullscreen or Games & video is the usual workaround.
 
 ## Layout
 
