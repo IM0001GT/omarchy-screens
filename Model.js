@@ -21,6 +21,7 @@ function clone(monitors) {
       cm: m.cm,
       format: m.format,
       hdr: m.hdr,
+      hdrMode: m.hdrMode,
       hdrCapable: m.hdrCapable,
       vrrCapable: m.vrrCapable,
       bitdepth: m.bitdepth,
@@ -232,6 +233,7 @@ function applyPayload(monitors) {
       transform: m.transform,
       vrr: m.vrr,
       hdr: !!m.hdr,
+      hdrMode: m.hdrMode,
       bitdepth: m.bitdepth,
       cm: m.cm,
       sdrMinLuminance: m.sdrMinLuminance,
@@ -304,7 +306,9 @@ function heroStatus(mon, profileName) {
   if (res) bits.push(res.replace("x", "×"))
   var hz = Number(mon.refresh)
   if (isFinite(hz) && hz > 0) bits.push(Math.round(hz) + " Hz")
-  if (mon.hdr) bits.push(Number(mon.bitdepth) === 8 ? "HDR 8" : "HDR")
+  if (Number(mon.hdrMode) === 1) bits.push("HDR Auto")
+  else if (mon.hdr || Number(mon.hdrMode) === 2)
+    bits.push(Number(mon.bitdepth) === 8 ? "HDR 8" : "HDR")
   if (Number(mon.vrr) === 1) bits.push("VRR")
   else if (Number(mon.vrr) === 2) bits.push("VRR FS")
   else if (Number(mon.vrr) === 3) bits.push("VRR GAME")
@@ -323,11 +327,20 @@ function mirrorOptions(monitors, selected) {
   return out
 }
 
+function hdrModeOf(mon) {
+  var n = Number(mon && mon.hdrMode)
+  if (n === 1 || n === 2) return n
+  return (mon && mon.hdr) ? 2 : 0
+}
+
 function hdrDescription(mon) {
-  if (!mon) return "PQ"
+  if (!mon) return "Off"
+  var mode = hdrModeOf(mon)
+  if (mode === 0) return "Desktop stays SDR"
   var bits = Number(mon.bitdepth) === 8 ? "8-bit" : "10-bit"
-  var cm = String(mon.cm || "") === "hdredid" ? "PQ · display" : "PQ · BT.2020"
-  return bits + " " + cm
+  var cm = String(mon.cm || "") === "hdredid" ? "display" : "BT.2020"
+  if (mode === 1) return "Fullscreen only · " + bits + " · " + cm
+  return "Always on · " + bits + " · " + cm
 }
 
 function defaultHdrCm(mon) {
@@ -390,6 +403,7 @@ if (typeof module !== "undefined") {
     applyPayload: applyPayload,
     pickMode: pickMode,
     heroStatus: heroStatus,
+    hdrModeOf: hdrModeOf,
     hdrDescription: hdrDescription,
     defaultHdrCm: defaultHdrCm,
     defaultSdrBrightness: defaultSdrBrightness,

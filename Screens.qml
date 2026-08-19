@@ -87,6 +87,11 @@ Panel {
     { value: "hdredid", label: "Display" },
     { value: "hdr", label: "Wide" }
   ]
+  readonly property var hdrModeOptions: [
+    { value: "0", label: "Off" },
+    { value: "1", label: "Auto" },
+    { value: "2", label: "Always" }
+  ]
   readonly property string barScreenName: {
     var win = button.QsWindow ? button.QsWindow.window : null
     return (win && win.screen) ? String(win.screen.name) : ""
@@ -285,15 +290,17 @@ Panel {
     mutateSelected(function(m) { m.vrr = n })
   }
 
-  function setHdr(on) {
+  function setHdrMode(value) {
     if (!root.selectedHdrOk) return
+    var n = parseInt(value, 10)
+    if (n !== 1 && n !== 2) n = 0
     mutateSelected(function(m) {
-      m.hdr = !!on
-      if (!on) return
+      m.hdrMode = n
+      m.hdr = n === 2
+      if (n === 0) return
       var capable = Number(m.bitdepthCapable) === 8 ? 8 : 10
       if (Number(m.bitdepth) !== 8 && Number(m.bitdepth) !== 10)
         m.bitdepth = capable
-      // Limited HDR LCDs look dull in BT.2020; use the panel's EDID primaries.
       if (!m.wideGamut) m.cm = "hdredid"
       else if (m.cm !== "hdr" && m.cm !== "hdredid") m.cm = "hdr"
       if (m.sdrMinLuminance === undefined || m.sdrMinLuminance === null
@@ -306,7 +313,7 @@ Panel {
       if (m.minLuminance === undefined || Number(m.minLuminance) < 0)
         m.minLuminance = 0
     })
-    if (on) Qt.callLater(function() { root.revealItem(hdrTuneSection.visible ? hdrTuneSection : hdrRow) })
+    if (n > 0) Qt.callLater(function() { root.revealItem(hdrTuneSection.visible ? hdrTuneSection : hdrRow) })
   }
 
   function setBitdepth(value) {
@@ -1405,18 +1412,20 @@ Panel {
                 width: parent.width
                 spacing: Style.space(8)
 
-                Toggle {
-                  width: parent.width - tuneBtn.width - parent.spacing
+                Dropdown {
+                  width: parent.width - (Model.hdrModeOf(root.selected) > 0 ? tuneBtn.width + parent.spacing : 0)
                   label: "HDR"
-                  description: Model.hdrDescription(root.selected)
-                  checked: !!(root.selected && root.selected.hdr)
+                  showLabel: true
                   foreground: root.bar.foreground
                   fontFamily: root.bar.fontFamily
-                  onClicked: root.setHdr(!(root.selected && root.selected.hdr))
+                  value: String(Model.hdrModeOf(root.selected))
+                  options: root.hdrModeOptions
+                  onChanged: function(v) { root.setHdrMode(v) }
                 }
 
                 Button {
                   id: tuneBtn
+                  visible: Model.hdrModeOf(root.selected) > 0
                   anchors.verticalCenter: parent.verticalCenter
                   text: root.hdrTuning ? "Done" : "Tune"
                   fontSize: Style.font.caption
@@ -1426,7 +1435,7 @@ Panel {
                   active: root.hdrTuning
                   horizontalPadding: Style.space(10)
                   verticalPadding: Style.space(4)
-                  tooltipText: "Bit depth, color space, and SDR brightness in HDR"
+                  tooltipText: "Bit depth, color space, and SDR brightness"
                   onClicked: {
                     root.hdrTuning = !root.hdrTuning
                     if (root.hdrTuning)
@@ -1435,11 +1444,27 @@ Panel {
                 }
               }
 
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: {
+                  var mode = Model.hdrModeOf(root.selected)
+                  if (mode === 1)
+                    return "Desktop stays SDR. HDR only for fullscreen games and video."
+                  if (mode === 2)
+                    return "HDR stays on. Can wash out HDR-ready LCDs."
+                  return "Leave off unless a game or video needs HDR."
+                }
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
               Column {
                 id: hdrTuneSection
                 width: parent.width
                 spacing: Style.space(8)
-                visible: root.hdrTuning
+                visible: root.hdrTuning && Model.hdrModeOf(root.selected) > 0
 
                 Column {
                   width: parent.width

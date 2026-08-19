@@ -69,10 +69,9 @@ The first time Screens sees `~/.config/hypr/monitors.lua`, it copies that file t
 
 **HDR and VRR**
 
-- **HDR** enables PQ output. **Tune** picks 8-bit or 10-bit, color space, SDR brightness, black floor, and SDR peak
-- Color space **Display** uses this panel's EDID primaries. **Wide** is BT.2020. HDR-ready LCDs that are not full wide-gamut should stay on Display — Wide often looks dull there
-- Screens reads 8-bit vs 10-bit from the EDID when it can. Enabling HDR on a limited LCD uses Display primaries and raises SDR brightness so the desktop does not go dim
-- Enabling HDR sets black floor to 0.005 nits (Hyprland's default 0.2 nits lifts dark scenes)
+- **HDR**: **Off**, **Auto**, or **Always**. Auto keeps the desktop in SDR and only switches to HDR for fullscreen games and video (`cm_auto_hdr`). Always leaves PQ on all the time and can wash out HDR-ready LCDs
+- **Tune** (Auto or Always): 8-bit or 10-bit, color space, SDR brightness, black floor, and SDR peak
+- Color space **Display** uses this panel's EDID primaries. **Wide** is BT.2020. HDR-ready LCDs that are not full wide-gamut should stay on Display
 - HDR and VRR disable themselves when that panel cannot do them
 - VRR modes: Off, Always, Fullscreen, Games & video. Always + HDR can flicker on some OLEDs; Fullscreen or Games & video is the usual workaround
 

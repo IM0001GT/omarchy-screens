@@ -276,6 +276,12 @@ def parse_lua_monitors(text):
         m = re.search(r"(?<![a-z_])max_luminance\s*=\s*([0-9.]+)", block)
         if m:
             entry["maxLuminance"] = int(float(m.group(1)))
+        cm = entry.get("cm") or ""
+        supports = bool(re.search(r"supports_hdr\s*=\s*1", block))
+        if cm in ("hdr", "hdredid"):
+            entry["hdrMode"] = 2
+        elif supports:
+            entry["hdrMode"] = 1
         found[out.group(1)] = entry
     return found
 
@@ -460,6 +466,7 @@ def stub_monitor(name):
         "cm": "srgb",
         "format": "",
         "hdr": False,
+        "hdrMode": 0,
         "hdrCapable": False,
         "vrrCapable": False,
         "bitdepth": 8,
@@ -554,6 +561,7 @@ def snapshot():
             "cm": cm,
             "format": mon.get("currentFormat") or "",
             "hdr": hdr_on,
+            "hdrMode": 2 if hdr_on else 0,
             "hdrCapable": caps["hdr"],
             "vrrCapable": caps["vrr"],
             "bitdepth": bitdepth,
@@ -580,15 +588,18 @@ def snapshot():
     layout_by_id = layout_map(store_early.get("lastLayout"))
     for entry in monitors:
         saved = layout_by_id.get(entry.get("identity") or "") or {}
-        for key in ("bitdepth", "cm", "sdrMinLuminance", "sdrMaxLuminance", "sdrBrightness", "minLuminance", "maxLuminance"):
+        for key in ("bitdepth", "cm", "hdrMode", "sdrMinLuminance", "sdrMaxLuminance", "sdrBrightness", "minLuminance", "maxLuminance"):
             if key in saved and saved[key] not in (None, ""):
                 entry[key] = saved[key]
         rule = lua_rule_for(entry, lua_rules)
         if "vrr" in rule:
             entry["vrr"] = rule["vrr"]
-        for key in ("bitdepth", "cm", "sdrMinLuminance", "sdrMaxLuminance", "sdrBrightness", "minLuminance", "maxLuminance"):
+        for key in ("bitdepth", "cm", "hdrMode", "sdrMinLuminance", "sdrMaxLuminance", "sdrBrightness", "minLuminance", "maxLuminance"):
             if key in rule:
                 entry[key] = rule[key]
+        mode = hdr_mode(entry)
+        entry["hdrMode"] = mode
+        entry["hdr"] = mode == 2
     merge_drm_connected(monitors)
     ensure_original_backup()
     store = load_store()
@@ -722,7 +733,7 @@ def restore_desk_geometry(monitors):
             continue
         for key in (
             "mode", "x", "y", "scale", "transform", "vrr", "hdr",
-            "bitdepth", "cm", "sdrMinLuminance", "sdrMaxLuminance",
+            "hdrMode", "bitdepth", "cm", "sdrMinLuminance", "sdrMaxLuminance",
             "sdrBrightness", "minLuminance", "maxLuminance",
         ):
             if key in rule:
@@ -949,6 +960,27 @@ def clean_cm(value):
     return text if text in ("hdr", "hdredid") else "hdr"
 
 
+def hdr_mode(mon):
+    raw = mon.get("hdrMode")
+    if raw is not None and raw != "":
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            n = -1
+        if n in (0, 1, 2):
+            return n
+    return 2 if mon.get("hdr") else 0
+
+
+def auto_hdr_render(monitors):
+    autos = [m for m in monitors if m.get("enabled", True) and hdr_mode(m) == 1]
+    if not autos:
+        return 0
+    if any(clean_cm(m.get("cm")) == "hdredid" or not m.get("wideGamut") for m in autos):
+        return 2
+    return 1
+
+
 def format_float(n):
     text = ("%.4f" % float(n)).rstrip("0").rstrip(".")
     return text if text else "0"
@@ -979,7 +1011,8 @@ def sanitize_monitor(mon, known_names=None):
         "scale": clean_scale(mon.get("scale")),
         "transform": clean_int(mon.get("transform"), 0, 7, 0),
         "vrr": clean_int(mon.get("vrr"), 0, 3, 0),
-        "hdr": bool(mon.get("hdr")),
+        "hdr": hdr_mode(mon) == 2,
+        "hdrMode": hdr_mode(mon),
         "bitdepth": clean_bitdepth(mon.get("bitdepth"), 10),
         "cm": clean_cm(mon.get("cm")),
         "sdrMinLuminance": clean_float(mon.get("sdrMinLuminance"), 0.0, 1.0, 0.005),
@@ -1025,10 +1058,12 @@ def monitor_lua(mon, used_desc):
         fields.append("transform = %d" % transform)
     # Persist the integer even when 0. hyprctl often reports VRR as a boolean.
     fields.append("vrr = %d" % int(mon.get("vrr") or 0))
-    if mon.get("hdr"):
+    mode = hdr_mode(mon)
+    if mode in (1, 2):
         fields.append("bitdepth = %d" % clean_bitdepth(mon.get("bitdepth"), 10))
-        fields.append("cm = %s" % lua_str(clean_cm(mon.get("cm"))))
         fields.append("supports_hdr = 1")
+        if mode == 2:
+            fields.append("cm = %s" % lua_str(clean_cm(mon.get("cm"))))
         sdr_min = mon.get("sdrMinLuminance")
         if sdr_min is None:
             sdr_min = 0.005
@@ -1073,7 +1108,10 @@ def render_lua(monitors, gdk_scale):
     for mon in monitors:
         if mon.get("enabled", True):
             max_vrr = max(max_vrr, int(mon.get("vrr") or 0))
-    lines.append("hl.config({ misc = { vrr = %d } })" % max_vrr)
+    lines.append(
+        "hl.config({ misc = { vrr = %d }, render = { cm_auto_hdr = %d } })"
+        % (max_vrr, auto_hdr_render(monitors))
+    )
     lines.append(MANAGED_END)
     lines.append("")
     return "\n".join(lines) + "\n"
@@ -1166,7 +1204,10 @@ def write_monitors_lua(monitors):
     for mon in monitors:
         if mon.get("enabled", True):
             max_vrr = max(max_vrr, int(mon.get("vrr") or 0))
-    inner.append("hl.config({ misc = { vrr = %d } })" % max_vrr)
+    inner.append(
+        "hl.config({ misc = { vrr = %d }, render = { cm_auto_hdr = %d } })"
+        % (max_vrr, auto_hdr_render(monitors))
+    )
     inner.append(MANAGED_END)
     block = "\n".join(inner) + "\n"
     spliced = splice_managed(existing, block)
@@ -1219,7 +1260,12 @@ def apply(payload):
     for mon in monitors:
         if mon.get("enabled", True):
             max_vrr = max(max_vrr, int(mon.get("vrr") or 0))
-    run(["hyprctl", "eval", "hl.config({ misc = { vrr = %d } })" % max_vrr])
+    run([
+        "hyprctl",
+        "eval",
+        "hl.config({ misc = { vrr = %d }, render = { cm_auto_hdr = %d } })"
+        % (max_vrr, auto_hdr_render(monitors)),
+    ])
     errors = config_errors()
     if errors:
         if prev:
@@ -1281,7 +1327,8 @@ def profile_entry_from_monitor(mon):
         "scale": mon.get("scale") if mon.get("scale") not in (None, "") else 1,
         "transform": int(mon.get("transform") or 0),
         "vrr": int(mon.get("vrr") or 0),
-        "hdr": bool(mon.get("hdr")),
+        "hdr": hdr_mode(mon) == 2,
+        "hdrMode": hdr_mode(mon),
         "bitdepth": clean_bitdepth(mon.get("bitdepth"), 10),
         "cm": clean_cm(mon.get("cm")),
         "sdrMinLuminance": clean_float(mon.get("sdrMinLuminance"), 0.0, 1.0, 0.005),
@@ -1305,7 +1352,7 @@ def merge_profile(profile, live):
         item = dict(live_m)
         for key in (
             "mode", "x", "y", "scale", "transform", "vrr", "hdr",
-            "bitdepth", "cm", "sdrMinLuminance", "sdrMaxLuminance",
+            "hdrMode", "bitdepth", "cm", "sdrMinLuminance", "sdrMaxLuminance",
             "sdrBrightness", "minLuminance", "maxLuminance", "enabled", "mirror",
         ):
             if key in rule:
