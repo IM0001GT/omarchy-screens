@@ -13,6 +13,8 @@ Commands:
   profile auto 0|1
   profile primary <identity>
   idle off|on|notice
+  backup-original    snapshot monitors.lua once, before Screens writes it
+  restore-original   put that first snapshot back and reload Hyprland
 """
 
 from __future__ import annotations
@@ -29,8 +31,10 @@ import time
 MONITORS_LUA = os.path.expanduser("~/.config/hypr/monitors.lua")
 BACKUP_DIR = os.path.expanduser("~/.local/state/im0001gt.screens")
 PROFILES_PATH = os.path.join(BACKUP_DIR, "profiles.json")
+ORIGINAL_BACKUP = os.path.join(BACKUP_DIR, "original-monitors.lua")
 MANAGED_BEGIN = "-- BEGIN im0001gt.screens"
 MANAGED_END = "-- END im0001gt.screens"
+STAMPED_BACKUP_GLOB = "monitors.lua.[0-9]*"
 
 
 def run(cmd, timeout=4):
@@ -570,6 +574,7 @@ def snapshot():
             if key in rule:
                 entry[key] = rule[key]
     merge_drm_connected(monitors)
+    ensure_original_backup()
     store = load_store()
     ids = [m["identity"] for m in monitors if m.get("identity")]
     match = match_profile(store, ids)
@@ -1053,6 +1058,46 @@ def render_lua(monitors, gdk_scale):
     return "\n".join(lines) + "\n"
 
 
+def looks_managed(text):
+    return MANAGED_BEGIN in (text or "")
+
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def write_original_backup(text):
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    tmp = ORIGINAL_BACKUP + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.replace(tmp, ORIGINAL_BACKUP)
+    return True
+
+
+def ensure_original_backup(text=None):
+    """Keep the first unmanaged monitors.lua forever. Never overwrite it.
+
+    Rolling apply backups are separate and get pruned. This file survives
+    plugin remove so someone can go back to the layout they had before Screens.
+    """
+    if os.path.isfile(ORIGINAL_BACKUP):
+        return False
+    if text is None:
+        text = read_text(MONITORS_LUA) if os.path.isfile(MONITORS_LUA) else ""
+    if text.strip() and not looks_managed(text):
+        return write_original_backup(text)
+    for path in sorted(glob.glob(os.path.join(BACKUP_DIR, STAMPED_BACKUP_GLOB))):
+        body = read_text(path)
+        if body.strip() and not looks_managed(body):
+            return write_original_backup(body)
+    return False
+
+
 def backup_file(path):
     if not os.path.isfile(path):
         return
@@ -1060,12 +1105,24 @@ def backup_file(path):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dest = os.path.join(BACKUP_DIR, "monitors.lua.%s" % stamp)
     shutil.copy2(path, dest)
-    old = sorted(glob.glob(os.path.join(BACKUP_DIR, "monitors.lua.*")))
+    old = sorted(glob.glob(os.path.join(BACKUP_DIR, STAMPED_BACKUP_GLOB)))
     for extra in old[:-8]:
         try:
             os.unlink(extra)
         except OSError:
             pass
+
+
+def restore_original():
+    if not os.path.isfile(ORIGINAL_BACKUP):
+        print("restore-original: no first-install snapshot at %s" % ORIGINAL_BACKUP, file=sys.stderr)
+        return 2
+    if os.path.isfile(MONITORS_LUA):
+        backup_file(MONITORS_LUA)
+    shutil.copy2(ORIGINAL_BACKUP, MONITORS_LUA)
+    reload_hypr()
+    print("Restored %s from %s" % (MONITORS_LUA, ORIGINAL_BACKUP))
+    return 0
 
 
 def splice_managed(existing, block):
@@ -1102,6 +1159,7 @@ def write_monitors_lua(monitors):
         text = render_lua(monitors, gdk)
     else:
         text = (existing.rstrip() + "\n\n" + block) if existing.strip() else render_lua(monitors, gdk)
+    ensure_original_backup(existing)
     backup_file(MONITORS_LUA)
     os.makedirs(os.path.dirname(MONITORS_LUA), exist_ok=True)
     tmp = MONITORS_LUA + ".tmp"
@@ -1367,6 +1425,17 @@ def main(argv):
     if cmd == "state":
         print(json.dumps(snapshot(), separators=(",", ":")))
         return 0
+    if cmd == "backup-original":
+        if os.path.isfile(ORIGINAL_BACKUP):
+            print(ORIGINAL_BACKUP)
+            return 0
+        if ensure_original_backup():
+            print(ORIGINAL_BACKUP)
+            return 0
+        print("backup-original: no unmanaged monitors.lua to snapshot", file=sys.stderr)
+        return 1
+    if cmd == "restore-original":
+        return restore_original()
     if cmd == "apply":
         raw = argv[1] if len(argv) > 1 else sys.stdin.read()
         try:

@@ -61,7 +61,7 @@ cd omarchy-screens
 - Labels use Hyprland's model string. HDR and VRR disable themselves when that panel cannot do them
 - **Make primary** chooses which screen the panel prefers when it opens
 
-Changes write `~/.config/hypr/monitors.lua` after you drag, turn a display on, or save. Backups and profiles land in `~/.local/state/im0001gt.screens/`. Stock Omarchy monitor files are replaced; other custom files keep their text and get a managed block appended.
+Changes write `~/.config/hypr/monitors.lua` after you drag, turn a display on, or save. The **first** time Screens sees your `monitors.lua` (install or first panel open, before it writes), it copies that file to `~/.local/state/im0001gt.screens/original-monitors.lua` and never overwrites it. Later applies keep a short rolling set of timestamped copies in the same folder. Stock Omarchy monitor files are replaced; other custom files keep their text and get a managed block appended.
 
 Move it with `omarchy bar move im0001gt.screens`.
 
@@ -84,7 +84,20 @@ omarchy restart shell
 omarchy plugin remove im0001gt.screens
 ```
 
-Your last `monitors.lua` stays in place. Backups and profiles are not deleted.
+Removing the plugin does **not** put `monitors.lua` back. The last layout Screens wrote stays in `~/.config/hypr/monitors.lua`. The first-install copy and profiles stay in `~/.local/state/im0001gt.screens/` on purpose.
+
+To go back to the layout from before Screens:
+
+```bash
+~/.config/omarchy/plugins/im0001gt.screens/scripts/display-ctl restore-original
+```
+
+If you already removed the plugin, copy the snapshot yourself:
+
+```bash
+cp ~/.local/state/im0001gt.screens/original-monitors.lua ~/.config/hypr/monitors.lua
+hyprctl reload
+```
 
 ## Requirements
 
