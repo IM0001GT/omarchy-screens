@@ -98,6 +98,14 @@ else
   copy_plugin_files
 fi
 
+# Snapshot ~/.config/hypr/monitors.lua once, before Screens ever writes it.
+# Survives plugin remove. Restore with: display-ctl restore-original
+ctl="$plugin_dir/scripts/display-ctl"
+[[ -x $ctl ]] || ctl="$SCRIPT_DIR/scripts/display-ctl"
+if [[ -x $ctl ]] && run_as_user "$ctl" backup-original >/dev/null; then
+  echo "Kept your current monitors.lua at ~/.local/state/im0001gt.screens/original-monitors.lua"
+fi
+
 run_as_user omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
 
 discovered=0
@@ -123,5 +131,8 @@ reload_shell
 echo
 echo "Done. Screens is a bar widget — click the two-tile icon."
 echo "  Drag tiles to arrange. They snap flush."
-echo "  Per screen: resolution, refresh, HDR, VRR, scale, rotation."
+echo "  Per screen: brightness, resolution, refresh, HDR, VRR, scale, rotation."
+echo "  Desktop: text size."
 echo "  Uninstall: omarchy plugin remove $PLUGIN_ID"
+echo "  Restore pre-Screens monitors.lua:"
+echo "    $plugin_dir/scripts/display-ctl restore-original"

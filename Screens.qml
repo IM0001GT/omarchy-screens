@@ -45,6 +45,14 @@ Panel {
   property var standbyNames: []
   property bool hybridGpus: false
   property bool showHybridNotice: false
+  property bool hdrTuning: false
+  property int brightnessPercent: 0
+  property int pendingBrightnessPercent: 0
+  property bool brightnessSetQueued: false
+  property bool brightnessAvailable: false
+  property int textSizePreviewIndex: -1
+  property bool reflowingText: false
+  readonly property var textSizeStops: [9, 10, 11, 12, 14, 16, 20]
 
   readonly property var selected: {
     if (selectedIndex < 0 || selectedIndex >= monitors.length) return null
@@ -71,6 +79,14 @@ Panel {
     { value: "2", label: "Fullscreen" },
     { value: "3", label: "Games & video" }
   ]
+  readonly property var bitdepthOptions: [
+    { value: "8", label: "8-bit" },
+    { value: "10", label: "10-bit" }
+  ]
+  readonly property var hdrCmOptions: [
+    { value: "hdr", label: "HDR PQ" },
+    { value: "hdredid", label: "HDR EDID" }
+  ]
   readonly property string barScreenName: {
     var win = button.QsWindow ? button.QsWindow.window : null
     return (win && win.screen) ? String(win.screen.name) : ""
@@ -96,6 +112,77 @@ Panel {
 
   function refresh() {
     if (!stateProc.running) stateProc.running = true
+    if (root.opened) root.refreshBrightness()
+  }
+
+  function brightnessMonitor() {
+    if (root.selected && root.selected.name) return String(root.selected.name)
+    return root.barScreenName
+  }
+
+  function refreshBrightness() {
+    if (setBrightnessProc.running) return
+    if (brightnessSlider && brightnessSlider.dragging) return
+    var name = root.brightnessMonitor()
+    if (!name) {
+      root.brightnessAvailable = false
+      return
+    }
+    brightnessProc.command = ["omarchy-brightness-display", "--monitor", name]
+    if (!brightnessProc.running) brightnessProc.running = true
+  }
+
+  function setBrightness(value) {
+    var percent = Model.clampBrightness(value)
+    root.brightnessPercent = percent
+    root.pendingBrightnessPercent = percent
+    var name = root.brightnessMonitor()
+    if (!name) return
+    if (setBrightnessProc.running) {
+      root.brightnessSetQueued = true
+      return
+    }
+    root.brightnessSetQueued = false
+    setBrightnessProc.command = ["omarchy-brightness-display", "--no-osd", "--monitor", name, percent + "%"]
+    setBrightnessProc.running = true
+  }
+
+  function previewBrightness(value) {
+    root.brightnessPercent = Model.clampBrightness(value)
+    brightnessDebounce.restart()
+  }
+
+  function nearestTextStop(px) {
+    var best = 0
+    var bestDist = 1e9
+    for (var i = 0; i < root.textSizeStops.length; i++) {
+      var d = Math.abs(root.textSizeStops[i] - px)
+      if (d < bestDist) { bestDist = d; best = i }
+    }
+    return best
+  }
+
+  function currentTextIndex() {
+    return root.textSizePreviewIndex >= 0
+      ? root.textSizePreviewIndex
+      : root.nearestTextStop(Style.font.baseSize)
+  }
+
+  function displayedTextPx() {
+    return root.textSizePreviewIndex >= 0
+      ? root.textSizeStops[root.textSizePreviewIndex]
+      : Style.font.baseSize
+  }
+
+  function setTextSize(px) {
+    root.textSizePreviewIndex = root.nearestTextStop(px)
+    textScaleProc.command = ["omarchy-display-text-size", String(px)]
+    if (!textScaleProc.running) textScaleProc.running = true
+  }
+
+  function markReflowing() {
+    root.reflowingText = true
+    reflowSettle.restart()
   }
 
   function adopt(data) {
@@ -183,6 +270,7 @@ Panel {
 
   function setScale(scale) {
     mutateSelected(function(m) { m.scale = Number(scale) })
+    Qt.callLater(function() { root.revealItem(scaleSection) })
   }
 
   function setTransform(value) {
@@ -199,7 +287,65 @@ Panel {
 
   function setHdr(on) {
     if (!root.selectedHdrOk) return
-    mutateSelected(function(m) { m.hdr = !!on })
+    mutateSelected(function(m) {
+      m.hdr = !!on
+      if (!on) return
+      var capable = Number(m.bitdepthCapable) === 8 ? 8 : 10
+      if (Number(m.bitdepth) !== 8 && Number(m.bitdepth) !== 10)
+        m.bitdepth = capable
+      if (m.cm !== "hdr" && m.cm !== "hdredid") m.cm = "hdr"
+      // Hyprland default sdr_min_luminance is 0.2; 0.005 maps SDR black to the panel.
+      if (m.sdrMinLuminance === undefined || m.sdrMinLuminance === null
+          || Number(m.sdrMinLuminance) >= 0.199)
+        m.sdrMinLuminance = 0.005
+      if (!m.sdrMaxLuminance || Number(m.sdrMaxLuminance) <= 80)
+        m.sdrMaxLuminance = Model.defaultSdrPeak(m)
+      if (m.minLuminance === undefined || Number(m.minLuminance) < 0)
+        m.minLuminance = 0
+    })
+    if (on) Qt.callLater(function() { root.revealItem(hdrTuneSection.visible ? hdrTuneSection : hdrRow) })
+  }
+
+  function setBitdepth(value) {
+    if (!root.selectedHdrOk) return
+    var n = parseInt(value, 10) === 8 ? 8 : 10
+    mutateSelected(function(m) { m.bitdepth = n })
+  }
+
+  function setHdrCm(value) {
+    if (!root.selectedHdrOk) return
+    var cm = String(value) === "hdredid" ? "hdredid" : "hdr"
+    mutateSelected(function(m) { m.cm = cm })
+  }
+
+  function setSdrMin(value, apply) {
+    if (!root.selected) return
+    var next = Model.clone(root.monitors)
+    next[root.selectedIndex].sdrMinLuminance = Math.max(0, Math.min(0.2, Number(value)))
+    root.monitors = next
+    if (apply) applyNow()
+  }
+
+  function setSdrMax(value, apply) {
+    if (!root.selected) return
+    var next = Model.clone(root.monitors)
+    next[root.selectedIndex].sdrMaxLuminance = Math.max(40, Math.min(400, Math.round(Number(value))))
+    root.monitors = next
+    if (apply) applyNow()
+  }
+
+  function revealItem(item) {
+    if (!item || !panelFlick) return
+    if (panelFlick.contentHeight <= panelFlick.height) return
+    var y = item.mapToItem(panelFlick.contentItem, 0, 0).y
+    var h = item.height
+    var top = panelFlick.contentY
+    var bot = top + panelFlick.height
+    var margin = Style.space(8)
+    if (y < top + margin)
+      panelFlick.contentY = Math.max(0, y - margin)
+    else if (y + h > bot - margin)
+      panelFlick.contentY = Math.max(0, Math.min(panelFlick.contentHeight - panelFlick.height, y + h + margin - panelFlick.height))
   }
 
   function setEnabled(on) {
@@ -363,11 +509,14 @@ Panel {
     if (!opened) {
       root.detectNote = ""
       root.detectPending = false
+      root.hdrTuning = false
       return
     }
     root.userPicked = false
     refresh()
   }
+
+  onSelectedIndexChanged: if (root.opened) root.refreshBrightness()
 
   IpcHandler {
     enabled: root.isFocusedBar
@@ -446,6 +595,58 @@ Panel {
     }
   }
 
+  Process {
+    id: brightnessProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (brightnessSlider && brightnessSlider.dragging) return
+        var line = String(text || "").trim().split("\n")[0]
+        var n = parseInt(line, 10)
+        root.brightnessAvailable = line !== "" && line !== "unavailable" && isFinite(n)
+        if (root.brightnessAvailable) root.brightnessPercent = Math.max(0, Math.min(100, n))
+      }
+    }
+  }
+
+  Timer {
+    id: brightnessDebounce
+    interval: 180
+    repeat: false
+    onTriggered: root.setBrightness(root.brightnessPercent)
+  }
+
+  Process {
+    id: setBrightnessProc
+    stdout: StdioCollector { waitForEnd: true }
+    onRunningChanged: {
+      if (running) return
+      if (root.brightnessSetQueued) root.setBrightness(root.pendingBrightnessPercent)
+    }
+  }
+
+  Process {
+    id: textScaleProc
+    stdout: StdioCollector { waitForEnd: true }
+  }
+
+  Timer {
+    id: reflowSettle
+    interval: 300
+    repeat: false
+    onTriggered: root.reflowingText = false
+  }
+
+  Connections {
+    target: Style
+    function onFontBaseSizeChanged() {
+      root.markReflowing()
+      if (root.textSizePreviewIndex >= 0
+          && root.nearestTextStop(Style.font.baseSize) === root.textSizePreviewIndex)
+        root.textSizePreviewIndex = -1
+    }
+  }
+
   BarIconButton {
     id: button
     anchors.fill: parent
@@ -476,13 +677,27 @@ Panel {
       anchors.fill: parent
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onMoveRequested: function(dx, dy) {
+        if (!panelFlick.interactive) return
+        var step = Style.space(48)
+        var maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
+        panelFlick.contentY = Math.max(0, Math.min(maxY, panelFlick.contentY + dy * step))
+      }
 
-      Column {
-        id: panelColumn
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        spacing: Style.space(10)
+      Flickable {
+        id: panelFlick
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: panelColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+        interactive: contentHeight > height && !root.dragging
+
+        Column {
+          id: panelColumn
+          width: panelFlick.width
+          spacing: Style.space(10)
 
           Item {
             width: parent.width
@@ -518,6 +733,8 @@ Panel {
 
               Text {
                 text: (root.dragging ? "Snapping edges"
+                  : (brightnessSlider && brightnessSlider.dragging)
+                    ? Model.brightnessName(brightnessSlider.liveValue)
                   : root.detectNote ? root.detectNote
                   : Model.heroStatus(root.selected, root.activeProfile)).toUpperCase()
                 color: Qt.darker(root.bar.foreground, 1.4)
@@ -1013,6 +1230,99 @@ Panel {
             }
 
             Column {
+              visible: root.brightnessAvailable
+              width: parent.width
+              spacing: Style.space(6)
+
+              Item {
+                width: parent.width
+                implicitHeight: Math.max(brightnessHeader.implicitHeight, brightnessPercentLabel.implicitHeight)
+
+                PanelSectionHeader {
+                  id: brightnessHeader
+                  text: "BRIGHTNESS"
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  id: brightnessPercentLabel
+                  text: Math.round(brightnessSlider.dragging ? brightnessSlider.liveValue : root.brightnessPercent) + "%"
+                  color: Qt.darker(root.bar.foreground, 1.4)
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+
+              PanelSlider {
+                id: brightnessSlider
+                width: parent.width
+                bar: root.bar
+                minimum: 1
+                maximum: 100
+                step: 1
+                value: root.brightnessPercent
+                integer: true
+                onMoved: function(v) { root.previewBrightness(v) }
+                onReleased: function(v) {
+                  brightnessDebounce.stop()
+                  root.setBrightness(v)
+                }
+              }
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Item {
+                width: parent.width
+                implicitHeight: Math.max(textSizeHeader.implicitHeight, textSizePx.implicitHeight)
+
+                PanelSectionHeader {
+                  id: textSizeHeader
+                  text: "TEXT SIZE"
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  id: textSizePx
+                  text: (textSizeSlider.dragging
+                    ? root.textSizeStops[Math.round(textSizeSlider.liveValue)]
+                    : root.displayedTextPx()) + "px"
+                  color: Qt.darker(root.bar.foreground, 1.4)
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+
+              PanelSlider {
+                id: textSizeSlider
+                width: parent.width
+                bar: root.bar
+                minimum: 0
+                maximum: root.textSizeStops.length - 1
+                step: 1
+                integer: true
+                tickCount: root.textSizeStops.length
+                value: root.currentTextIndex()
+                onReleased: function(v) { root.setTextSize(root.textSizeStops[Math.round(v)]) }
+              }
+            }
+
+            Column {
+              id: scaleSection
               width: parent.width
               spacing: Style.space(4)
 
@@ -1074,15 +1384,244 @@ Panel {
               }
             }
 
-            Toggle {
-              visible: root.selectedHdrOk
+            Column {
+              id: hdrRow
               width: parent.width
-              label: "HDR"
-              description: "10-bit PQ"
-              checked: !!(root.selected && root.selected.hdr)
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              onClicked: root.setHdr(!(root.selected && root.selected.hdr))
+              spacing: Style.space(6)
+              visible: root.selectedHdrOk
+
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Toggle {
+                  width: parent.width - tuneBtn.width - parent.spacing
+                  label: "HDR"
+                  description: Model.hdrDescription(root.selected)
+                  checked: !!(root.selected && root.selected.hdr)
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  onClicked: root.setHdr(!(root.selected && root.selected.hdr))
+                }
+
+                Button {
+                  id: tuneBtn
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.hdrTuning ? "Done" : "Tune"
+                  fontSize: Style.font.caption
+                  fontFamily: root.bar.fontFamily
+                  foreground: root.bar.foreground
+                  bordered: true
+                  active: root.hdrTuning
+                  horizontalPadding: Style.space(10)
+                  verticalPadding: Style.space(4)
+                  tooltipText: "8-bit / 10-bit, primaries, and black / peak brightness"
+                  onClicked: {
+                    root.hdrTuning = !root.hdrTuning
+                    if (root.hdrTuning)
+                      Qt.callLater(function() { root.revealItem(hdrTuneSection) })
+                  }
+                }
+              }
+
+              Column {
+                id: hdrTuneSection
+                width: parent.width
+                spacing: Style.space(8)
+                visible: root.hdrTuning
+
+                Column {
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  PanelSectionHeader {
+                    text: "BIT DEPTH"
+                    foreground: root.bar.foreground
+                    fontFamily: root.bar.fontFamily
+                  }
+
+                  Grid {
+                    id: bitdepthRow
+                    width: parent.width
+                    columns: root.bitdepthOptions.length
+                    spacing: Style.spacing.xs
+                    readonly property real cellWidth: (width - spacing * (columns - 1)) / columns
+
+                    Repeater {
+                      model: root.bitdepthOptions
+
+                      Button {
+                        required property var modelData
+                        width: bitdepthRow.cellWidth
+                        text: modelData.label
+                        fontSize: Style.font.caption
+                        fontFamily: root.bar.fontFamily
+                        foreground: root.bar.foreground
+                        bordered: true
+                        active: root.selected && Number(root.selected.bitdepth) === Number(modelData.value)
+                        onClicked: root.setBitdepth(modelData.value)
+                      }
+                    }
+                  }
+
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: Number(root.selected && root.selected.bitdepthCapable) === 8
+                      ? "EDID reports 8-bit. 10-bit may still work on DisplayPort."
+                      : "10-bit HDR. Use 8-bit if screen capture fails."
+                    color: Qt.darker(root.bar.foreground, 1.4)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+
+                Column {
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  PanelSectionHeader {
+                    text: "PRIMARIES"
+                    foreground: root.bar.foreground
+                    fontFamily: root.bar.fontFamily
+                  }
+
+                  Grid {
+                    id: hdrCmRow
+                    width: parent.width
+                    columns: root.hdrCmOptions.length
+                    spacing: Style.spacing.xs
+                    readonly property real cellWidth: (width - spacing * (columns - 1)) / columns
+
+                    Repeater {
+                      model: root.hdrCmOptions
+
+                      Button {
+                        required property var modelData
+                        width: hdrCmRow.cellWidth
+                        text: modelData.label
+                        fontSize: Style.font.caption
+                        fontFamily: root.bar.fontFamily
+                        foreground: root.bar.foreground
+                        bordered: true
+                        active: root.selected && String(root.selected.cm) === String(modelData.value)
+                        onClicked: root.setHdrCm(modelData.value)
+                      }
+                    }
+                  }
+                }
+
+                Column {
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  Item {
+                    width: parent.width
+                    implicitHeight: Math.max(blackHeader.implicitHeight, blackValue.implicitHeight)
+
+                    PanelSectionHeader {
+                      id: blackHeader
+                      text: "BLACK FLOOR"
+                      foreground: root.bar.foreground
+                      fontFamily: root.bar.fontFamily
+                      anchors.left: parent.left
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                      id: blackValue
+                      text: {
+                        var n = root.selected ? Number(root.selected.sdrMinLuminance) : 0.005
+                        if (!isFinite(n)) n = 0.005
+                        return n.toFixed(3) + " nits"
+                      }
+                      color: Qt.darker(root.bar.foreground, 1.4)
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                      anchors.right: parent.right
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+                  }
+
+                  PanelSlider {
+                    width: parent.width
+                    bar: root.bar
+                    minimum: 0
+                    maximum: 0.2
+                    step: 0.005
+                    value: root.selected && isFinite(Number(root.selected.sdrMinLuminance))
+                      ? Number(root.selected.sdrMinLuminance) : 0.005
+                    onMoved: function(v) { root.setSdrMin(v, false) }
+                    onReleased: function(v) { root.setSdrMin(v, true) }
+                  }
+
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "Lower maps SDR black closer to the panel. Enabling HDR sets 0.005 nits."
+                    color: Qt.darker(root.bar.foreground, 1.4)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+
+                Column {
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  Item {
+                    width: parent.width
+                    implicitHeight: Math.max(peakHeader.implicitHeight, peakValue.implicitHeight)
+
+                    PanelSectionHeader {
+                      id: peakHeader
+                      text: "SDR PEAK"
+                      foreground: root.bar.foreground
+                      fontFamily: root.bar.fontFamily
+                      anchors.left: parent.left
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                      id: peakValue
+                      text: {
+                        var n = root.selected ? Number(root.selected.sdrMaxLuminance) : 200
+                        if (!isFinite(n)) n = 200
+                        return Math.round(n) + " nits"
+                      }
+                      color: Qt.darker(root.bar.foreground, 1.4)
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                      anchors.right: parent.right
+                      anchors.verticalCenter: parent.verticalCenter
+                    }
+                  }
+
+                  PanelSlider {
+                    width: parent.width
+                    bar: root.bar
+                    minimum: 80
+                    maximum: 400
+                    step: 10
+                    integer: true
+                    value: root.selected && isFinite(Number(root.selected.sdrMaxLuminance))
+                      ? Number(root.selected.sdrMaxLuminance) : 200
+                    onMoved: function(v) { root.setSdrMax(v, false) }
+                    onReleased: function(v) { root.setSdrMax(v, true) }
+                  }
+
+                  Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: "SDR white level while HDR is on. Typical range 200–250 nits."
+                    color: Qt.darker(root.bar.foreground, 1.4)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+              }
             }
 
             Dropdown {
@@ -1154,6 +1693,7 @@ Panel {
           Item { width: parent.width; height: Style.space(8) }
         }
       }
+    }
     }
 
   PanelWindow {

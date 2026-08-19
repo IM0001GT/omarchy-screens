@@ -13,6 +13,8 @@ Commands:
   profile auto 0|1
   profile primary <identity>
   idle off|on|notice
+  backup-original    snapshot monitors.lua once, before Screens writes it
+  restore-original   put that first snapshot back and reload Hyprland
 """
 
 from __future__ import annotations
@@ -29,8 +31,10 @@ import time
 MONITORS_LUA = os.path.expanduser("~/.config/hypr/monitors.lua")
 BACKUP_DIR = os.path.expanduser("~/.local/state/im0001gt.screens")
 PROFILES_PATH = os.path.join(BACKUP_DIR, "profiles.json")
+ORIGINAL_BACKUP = os.path.join(BACKUP_DIR, "original-monitors.lua")
 MANAGED_BEGIN = "-- BEGIN im0001gt.screens"
 MANAGED_END = "-- END im0001gt.screens"
+STAMPED_BACKUP_GLOB = "monitors.lua.[0-9]*"
 
 
 def run(cmd, timeout=4):
@@ -111,21 +115,42 @@ def drm_edid_path(name):
     return matches[0] if matches else None
 
 
+def decode_hdr_max_nits(cv):
+    if not cv:
+        return None
+    return int(round(50.0 * (2.0 ** (cv / 32.0))))
+
+
+def decode_hdr_min_nits(cv, max_nits):
+    if not cv or not max_nits:
+        return None
+    return float(max_nits) * ((cv / 255.0) ** 2) / 100.0
+
+
 def edid_caps(name):
     path = drm_edid_path(name)
-    hdr = False
-    vrr = False
+    caps = {
+        "hdr": False,
+        "vrr": False,
+        "bitdepth": 10,
+        "min_luminance": None,
+        "max_luminance": None,
+        "max_avg_luminance": None,
+    }
     if not path:
-        return hdr, vrr
+        return caps
     try:
         data = open(path, "rb").read()
     except OSError:
-        return hdr, vrr
+        return caps
     if len(data) < 128:
-        return hdr, vrr
+        return caps
+
+    hdmi_vsdb = False
+    hdmi_deep = False
 
     def walk(block):
-        nonlocal hdr, vrr
+        nonlocal hdmi_vsdb, hdmi_deep
         if len(block) < 5 or block[0] != 0x02:
             return
         dtd = block[2]
@@ -143,15 +168,35 @@ def edid_caps(name):
                 ext = payload[0]
                 # 6 = HDR static metadata, 7 = HDR dynamic metadata
                 if ext in (6, 7):
-                    hdr = True
-                # 14 = HDMI Forum SCDB (VRR), 1 = video capability
+                    caps["hdr"] = True
+                if ext == 6 and len(payload) >= 4:
+                    mx = decode_hdr_max_nits(payload[3])
+                    if mx:
+                        caps["max_luminance"] = mx
+                    if len(payload) >= 5:
+                        avg = decode_hdr_max_nits(payload[4])
+                        if avg:
+                            caps["max_avg_luminance"] = avg
+                    if len(payload) >= 6:
+                        mn = decode_hdr_min_nits(payload[5], caps["max_luminance"])
+                        if mn is not None:
+                            caps["min_luminance"] = mn
+                # 14 = HDMI Forum SCDB (VRR)
                 if ext == 0x0E:
-                    vrr = True
+                    caps["vrr"] = True
             if tag == 3 and len(payload) >= 3:
                 oui = (payload[0] << 16) | (payload[1] << 8) | payload[2]
-                # HDMI Forum SCDB, AMD FreeSync
+                # HDMI Forum VSDB, AMD FreeSync
                 if oui in (0xC45DD8, 0x00001A):
-                    vrr = True
+                    caps["vrr"] = True
+                if oui == 0xC45DD8:
+                    caps["bitdepth"] = 10
+                # HDMI 1.4 VSDB: byte 6 carries deep-color flags.
+                if oui == 0x000C03:
+                    hdmi_vsdb = True
+                    if len(payload) >= 7 and payload[6] & 0x70:
+                        hdmi_deep = True
+                        caps["bitdepth"] = 10
 
     walk(data[128:256] if len(data) >= 256 else b"")
     if len(data) >= 384:
@@ -159,8 +204,12 @@ def edid_caps(name):
     if len(data) >= 512:
         walk(data[384:512])
     if b"freesync" in data.lower() or b"adaptive-sync" in data.lower():
-        vrr = True
-    return hdr, vrr
+        caps["vrr"] = True
+    # HDMI VSDB with no DC_30/36/48 flag is a strong 8-bit-only signal.
+    # DP/eDP often omit that block; those stay on 10-bit when HDR is present.
+    if hdmi_vsdb and not hdmi_deep:
+        caps["bitdepth"] = 8
+    return caps
 
 
 def current_mode_id(mon):
@@ -192,15 +241,50 @@ def vrr_mode(mon):
         return 0
 
 
-def parse_lua_vrr(text):
+def parse_lua_monitors(text):
     found = {}
     for block in re.findall(r"hl\.monitor\(\{\s*(.*?)\s*\}\)", text or "", re.S):
         out = re.search(r'output\s*=\s*"([^"]+)"', block)
         if not out or not out.group(1):
             continue
+        entry = {}
         m = re.search(r"vrr\s*=\s*(\d+)", block)
-        found[out.group(1)] = int(m.group(1)) if m else 0
+        if m:
+            entry["vrr"] = int(m.group(1))
+        m = re.search(r"bitdepth\s*=\s*(\d+)", block)
+        if m:
+            entry["bitdepth"] = int(m.group(1))
+        m = re.search(r'cm\s*=\s*"([^"]+)"', block)
+        if m:
+            entry["cm"] = m.group(1)
+        m = re.search(r"sdr_min_luminance\s*=\s*([0-9.]+)", block)
+        if m:
+            entry["sdrMinLuminance"] = float(m.group(1))
+        m = re.search(r"sdr_max_luminance\s*=\s*([0-9.]+)", block)
+        if m:
+            entry["sdrMaxLuminance"] = int(float(m.group(1)))
+        m = re.search(r"(?<![a-z_])min_luminance\s*=\s*([0-9.]+)", block)
+        if m:
+            entry["minLuminance"] = float(m.group(1))
+        m = re.search(r"(?<![a-z_])max_luminance\s*=\s*([0-9.]+)", block)
+        if m:
+            entry["maxLuminance"] = int(float(m.group(1)))
+        found[out.group(1)] = entry
     return found
+
+
+def lua_rule_for(entry, lua_rules):
+    keys = [
+        entry.get("identity") or "",
+        entry.get("name") or "",
+    ]
+    desc = clean_desc(entry.get("description") or "")
+    if desc:
+        keys.append("desc:%s" % desc)
+    for key in keys:
+        if key and key in lua_rules:
+            return lua_rules[key]
+    return {}
 
 
 def read_monitors_lua():
@@ -371,6 +455,13 @@ def stub_monitor(name):
         "hdr": False,
         "hdrCapable": False,
         "vrrCapable": False,
+        "bitdepth": 8,
+        "bitdepthCapable": 8,
+        "sdrMinLuminance": 0.2,
+        "sdrMaxLuminance": 80,
+        "minLuminance": -1,
+        "maxLuminance": -1,
+        "maxAvgLuminance": -1,
         "logicalW": 1920,
         "logicalH": 1080,
         "mode": "preferred",
@@ -401,18 +492,35 @@ def snapshot():
         width = int(mon.get("width") or 0)
         height = int(mon.get("height") or 0)
         lw, lh = logical_size(width, height, scale, transform)
-        hdr_cap, vrr_cap = edid_caps(name)
+        caps = edid_caps(name)
         hdr_on = is_hdr(mon)
         if hdr_on:
-            hdr_cap = True
+            caps["hdr"] = True
         if vrr_mode(mon):
-            vrr_cap = True
-        if not vrr_cap and any(p["refresh"] >= 100 for p in modes):
-            vrr_cap = True
+            caps["vrr"] = True
+        if not caps["vrr"] and any(p["refresh"] >= 100 for p in modes):
+            caps["vrr"] = True
+        fmt = str(mon.get("currentFormat") or "").upper()
+        if any(tok in fmt for tok in ("2101010", "101010", "P010", "P012")):
+            caps["bitdepth"] = 10
         mirror = mon.get("mirrorOf") or ""
         if mirror == "none":
             mirror = ""
         vrr = vrr_mode(mon)
+        cm = mon.get("colorManagementPreset") or "srgb"
+        bitdepth = 10 if hdr_on and caps["bitdepth"] >= 10 else (10 if caps["bitdepth"] >= 10 else 8)
+        if hdr_on and any(tok in fmt for tok in ("XRGB8888", "XR24", "AR24")):
+            bitdepth = 8
+        sdr_min = mon.get("sdrMinLuminance")
+        sdr_max = mon.get("sdrMaxLuminance")
+        try:
+            sdr_min = float(sdr_min) if sdr_min is not None else 0.2
+        except (TypeError, ValueError):
+            sdr_min = 0.2
+        try:
+            sdr_max = int(float(sdr_max)) if sdr_max is not None else 80
+        except (TypeError, ValueError):
+            sdr_max = 80
         entry = {
             "name": name,
             "description": mon.get("description") or "",
@@ -429,11 +537,18 @@ def snapshot():
             "scale": float(scale),
             "transform": transform,
             "vrr": vrr,
-            "cm": mon.get("colorManagementPreset") or "srgb",
+            "cm": cm,
             "format": mon.get("currentFormat") or "",
             "hdr": hdr_on,
-            "hdrCapable": hdr_cap,
-            "vrrCapable": vrr_cap,
+            "hdrCapable": caps["hdr"],
+            "vrrCapable": caps["vrr"],
+            "bitdepth": bitdepth,
+            "bitdepthCapable": 10 if caps["bitdepth"] >= 10 else 8,
+            "sdrMinLuminance": sdr_min,
+            "sdrMaxLuminance": sdr_max,
+            "minLuminance": caps["min_luminance"] if caps["min_luminance"] is not None else -1,
+            "maxLuminance": caps["max_luminance"] if caps["max_luminance"] is not None else -1,
+            "maxAvgLuminance": caps["max_avg_luminance"] if caps["max_avg_luminance"] is not None else -1,
             "logicalW": lw,
             "logicalH": lh,
             "mode": current_mode_id(mon),
@@ -444,14 +559,22 @@ def snapshot():
         }
         entry["identity"] = monitor_identity(entry)
         monitors.append(entry)
-    lua_vrr = parse_lua_vrr(read_monitors_lua())
+    lua_rules = parse_lua_monitors(read_monitors_lua())
+    store_early = load_store()
+    layout_by_id = layout_map(store_early.get("lastLayout"))
     for entry in monitors:
-        key = entry.get("identity") or ""
-        if key in lua_vrr:
-            entry["vrr"] = lua_vrr[key]
-        elif entry.get("name") in lua_vrr:
-            entry["vrr"] = lua_vrr[entry["name"]]
+        saved = layout_by_id.get(entry.get("identity") or "") or {}
+        for key in ("bitdepth", "cm", "sdrMinLuminance", "sdrMaxLuminance", "minLuminance", "maxLuminance"):
+            if key in saved and saved[key] not in (None, ""):
+                entry[key] = saved[key]
+        rule = lua_rule_for(entry, lua_rules)
+        if "vrr" in rule:
+            entry["vrr"] = rule["vrr"]
+        for key in ("bitdepth", "cm", "sdrMinLuminance", "sdrMaxLuminance", "minLuminance", "maxLuminance"):
+            if key in rule:
+                entry[key] = rule[key]
     merge_drm_connected(monitors)
+    ensure_original_backup()
     store = load_store()
     ids = [m["identity"] for m in monitors if m.get("identity")]
     match = match_profile(store, ids)
@@ -581,7 +704,11 @@ def restore_desk_geometry(monitors):
         rule = hints.get(mon.get("identity") or "")
         if not rule:
             continue
-        for key in ("mode", "x", "y", "scale", "transform", "vrr", "hdr"):
+        for key in (
+            "mode", "x", "y", "scale", "transform", "vrr", "hdr",
+            "bitdepth", "cm", "sdrMinLuminance", "sdrMaxLuminance",
+            "minLuminance", "maxLuminance",
+        ):
             if key in rule:
                 mon[key] = rule[key]
         mon["mirror"] = ""
@@ -783,6 +910,34 @@ def clean_scale(value):
     return round(n, 3)
 
 
+def clean_float(value, lo, hi, default):
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return default
+    if n < lo or n > hi:
+        return default
+    return n
+
+
+def clean_bitdepth(value, default=10):
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return 10 if n >= 10 else 8
+
+
+def clean_cm(value):
+    text = str(value or "").strip().lower()
+    return text if text in ("hdr", "hdredid") else "hdr"
+
+
+def format_float(n):
+    text = ("%.4f" % float(n)).rstrip("0").rstrip(".")
+    return text if text else "0"
+
+
 def clean_connector(name):
     text = str(name or "").strip()
     return text if CONNECTOR_RE.match(text) else ""
@@ -809,18 +964,33 @@ def sanitize_monitor(mon, known_names=None):
         "transform": clean_int(mon.get("transform"), 0, 7, 0),
         "vrr": clean_int(mon.get("vrr"), 0, 3, 0),
         "hdr": bool(mon.get("hdr")),
+        "bitdepth": clean_bitdepth(mon.get("bitdepth"), 10),
+        "cm": clean_cm(mon.get("cm")),
+        "sdrMinLuminance": clean_float(mon.get("sdrMinLuminance"), 0.0, 1.0, 0.005),
+        "sdrMaxLuminance": clean_int(mon.get("sdrMaxLuminance"), 40, 1000, 200),
+        "minLuminance": clean_float(mon.get("minLuminance"), 0.0, 10.0, -1),
+        "maxLuminance": clean_int(mon.get("maxLuminance"), -1, 10000, -1),
         "enabled": bool(mon.get("enabled", True)),
         "identity": mon.get("identity") or "",
         "mirror": mirror,
     }
 
 
+INTERNAL_PANEL_RE = re.compile(r"^(eDP|LVDS|DSI)", re.I)
+
+
 def output_ref(mon, used_desc):
+    name = clean_connector(mon.get("name"))
+    # omarchy-hyprland-monitor-clamshell only reads the internal panel's rule
+    # when it is keyed by connector name. Behind a desc: key it finds no scale,
+    # falls back to 2, and re-applies it every 2s while docked.
+    if name and INTERNAL_PANEL_RE.match(name):
+        return name
     desc = clean_desc(mon.get("description") or "")
     if desc and desc not in used_desc:
         used_desc.add(desc)
         return "desc:%s" % desc
-    return clean_connector(mon.get("name")) or "Unknown"
+    return name or "Unknown"
 
 
 def monitor_lua(mon, used_desc):
@@ -839,9 +1009,24 @@ def monitor_lua(mon, used_desc):
     # Persist the integer even when 0. hyprctl often reports VRR as a boolean.
     fields.append("vrr = %d" % int(mon.get("vrr") or 0))
     if mon.get("hdr"):
-        fields.append("bitdepth = 10")
-        fields.append('cm = "hdr"')
+        fields.append("bitdepth = %d" % clean_bitdepth(mon.get("bitdepth"), 10))
+        fields.append("cm = %s" % lua_str(clean_cm(mon.get("cm"))))
         fields.append("supports_hdr = 1")
+        sdr_min = mon.get("sdrMinLuminance")
+        if sdr_min is None:
+            sdr_min = 0.005
+        fields.append("sdr_min_luminance = %s" % format_float(sdr_min))
+        fields.append("sdr_max_luminance = %d" % clean_int(mon.get("sdrMaxLuminance"), 40, 1000, 200))
+        min_lum = mon.get("minLuminance")
+        try:
+            min_lum = float(min_lum)
+        except (TypeError, ValueError):
+            min_lum = -1
+        if min_lum >= 0:
+            fields.append("min_luminance = %s" % format_float(min_lum))
+        max_lum = clean_int(mon.get("maxLuminance"), -1, 10000, -1)
+        if max_lum > 0:
+            fields.append("max_luminance = %d" % max_lum)
     mirror = mon.get("mirror") or ""
     if mirror and mirror not in ("none", name, mon.get("name")):
         fields.append("mirror = %s" % lua_str(mirror))
@@ -873,6 +1058,42 @@ def render_lua(monitors, gdk_scale):
     return "\n".join(lines) + "\n"
 
 
+def looks_managed(text):
+    return MANAGED_BEGIN in (text or "")
+
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def write_original_backup(text):
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    tmp = ORIGINAL_BACKUP + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.replace(tmp, ORIGINAL_BACKUP)
+    return True
+
+
+def ensure_original_backup(text=None):
+    """Snapshot monitors.lua once, before Screens writes it. Never overwrite."""
+    if os.path.isfile(ORIGINAL_BACKUP):
+        return False
+    if text is None:
+        text = read_text(MONITORS_LUA) if os.path.isfile(MONITORS_LUA) else ""
+    if text.strip() and not looks_managed(text):
+        return write_original_backup(text)
+    for path in sorted(glob.glob(os.path.join(BACKUP_DIR, STAMPED_BACKUP_GLOB))):
+        body = read_text(path)
+        if body.strip() and not looks_managed(body):
+            return write_original_backup(body)
+    return False
+
+
 def backup_file(path):
     if not os.path.isfile(path):
         return
@@ -880,12 +1101,24 @@ def backup_file(path):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dest = os.path.join(BACKUP_DIR, "monitors.lua.%s" % stamp)
     shutil.copy2(path, dest)
-    old = sorted(glob.glob(os.path.join(BACKUP_DIR, "monitors.lua.*")))
+    old = sorted(glob.glob(os.path.join(BACKUP_DIR, STAMPED_BACKUP_GLOB)))
     for extra in old[:-8]:
         try:
             os.unlink(extra)
         except OSError:
             pass
+
+
+def restore_original():
+    if not os.path.isfile(ORIGINAL_BACKUP):
+        print("restore-original: no first-install snapshot at %s" % ORIGINAL_BACKUP, file=sys.stderr)
+        return 2
+    if os.path.isfile(MONITORS_LUA):
+        backup_file(MONITORS_LUA)
+    shutil.copy2(ORIGINAL_BACKUP, MONITORS_LUA)
+    reload_hypr()
+    print("Restored %s from %s" % (MONITORS_LUA, ORIGINAL_BACKUP))
+    return 0
 
 
 def splice_managed(existing, block):
@@ -922,6 +1155,7 @@ def write_monitors_lua(monitors):
         text = render_lua(monitors, gdk)
     else:
         text = (existing.rstrip() + "\n\n" + block) if existing.strip() else render_lua(monitors, gdk)
+    ensure_original_backup(existing)
     backup_file(MONITORS_LUA)
     os.makedirs(os.path.dirname(MONITORS_LUA), exist_ok=True)
     tmp = MONITORS_LUA + ".tmp"
@@ -1027,6 +1261,12 @@ def profile_entry_from_monitor(mon):
         "transform": int(mon.get("transform") or 0),
         "vrr": int(mon.get("vrr") or 0),
         "hdr": bool(mon.get("hdr")),
+        "bitdepth": clean_bitdepth(mon.get("bitdepth"), 10),
+        "cm": clean_cm(mon.get("cm")),
+        "sdrMinLuminance": clean_float(mon.get("sdrMinLuminance"), 0.0, 1.0, 0.005),
+        "sdrMaxLuminance": clean_int(mon.get("sdrMaxLuminance"), 40, 1000, 200),
+        "minLuminance": clean_float(mon.get("minLuminance"), 0.0, 10.0, -1),
+        "maxLuminance": clean_int(mon.get("maxLuminance"), -1, 10000, -1),
         "enabled": bool(mon.get("enabled", True)),
         "mirror": mon.get("mirror") or "",
     }
@@ -1041,7 +1281,11 @@ def merge_profile(profile, live):
             merged.append(live_m)
             continue
         item = dict(live_m)
-        for key in ("mode", "x", "y", "scale", "transform", "vrr", "hdr", "enabled", "mirror"):
+        for key in (
+            "mode", "x", "y", "scale", "transform", "vrr", "hdr",
+            "bitdepth", "cm", "sdrMinLuminance", "sdrMaxLuminance",
+            "minLuminance", "maxLuminance", "enabled", "mirror",
+        ):
             if key in rule:
                 item[key] = rule[key]
         # Profile mirror is stored as identity; Hyprland wants a connector.
@@ -1177,6 +1421,17 @@ def main(argv):
     if cmd == "state":
         print(json.dumps(snapshot(), separators=(",", ":")))
         return 0
+    if cmd == "backup-original":
+        if os.path.isfile(ORIGINAL_BACKUP):
+            print(ORIGINAL_BACKUP)
+            return 0
+        if ensure_original_backup():
+            print(ORIGINAL_BACKUP)
+            return 0
+        print("backup-original: no unmanaged monitors.lua to snapshot", file=sys.stderr)
+        return 1
+    if cmd == "restore-original":
+        return restore_original()
     if cmd == "apply":
         raw = argv[1] if len(argv) > 1 else sys.stdin.read()
         try:

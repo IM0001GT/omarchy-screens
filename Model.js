@@ -23,6 +23,13 @@ function clone(monitors) {
       hdr: m.hdr,
       hdrCapable: m.hdrCapable,
       vrrCapable: m.vrrCapable,
+      bitdepth: m.bitdepth,
+      bitdepthCapable: m.bitdepthCapable,
+      sdrMinLuminance: m.sdrMinLuminance,
+      sdrMaxLuminance: m.sdrMaxLuminance,
+      minLuminance: m.minLuminance,
+      maxLuminance: m.maxLuminance,
+      maxAvgLuminance: m.maxAvgLuminance,
       logicalW: m.logicalW,
       logicalH: m.logicalH,
       mode: m.mode,
@@ -223,6 +230,12 @@ function applyPayload(monitors) {
       transform: m.transform,
       vrr: m.vrr,
       hdr: !!m.hdr,
+      bitdepth: m.bitdepth,
+      cm: m.cm,
+      sdrMinLuminance: m.sdrMinLuminance,
+      sdrMaxLuminance: m.sdrMaxLuminance,
+      minLuminance: m.minLuminance,
+      maxLuminance: m.maxLuminance,
       enabled: !!m.enabled,
       identity: m.identity,
       mirror: m.mirror || ""
@@ -288,7 +301,7 @@ function heroStatus(mon, profileName) {
   if (res) bits.push(res.replace("x", "×"))
   var hz = Number(mon.refresh)
   if (isFinite(hz) && hz > 0) bits.push(Math.round(hz) + " Hz")
-  if (mon.hdr) bits.push("HDR")
+  if (mon.hdr) bits.push(Number(mon.bitdepth) === 8 ? "HDR 8" : "HDR")
   if (Number(mon.vrr) === 1) bits.push("VRR")
   else if (Number(mon.vrr) === 2) bits.push("VRR FS")
   else if (Number(mon.vrr) === 3) bits.push("VRR GAME")
@@ -305,6 +318,39 @@ function mirrorOptions(monitors, selected) {
     out.push({ value: m.name, label: m.label || m.name })
   }
   return out
+}
+
+function hdrDescription(mon) {
+  if (!mon) return "PQ"
+  var bits = Number(mon.bitdepth) === 8 ? "8-bit" : "10-bit"
+  var cm = String(mon.cm || "") === "hdredid" ? "PQ · EDID" : "PQ"
+  return bits + " " + cm
+}
+
+function clampBrightness(value) {
+  var n = Number(value)
+  if (!isFinite(n)) return 1
+  return Math.max(1, Math.min(100, Math.round(n)))
+}
+
+function brightnessName(percent) {
+  var p = Math.round(percent)
+  if (p >= 95) return "Sun blast"
+  if (p >= 80) return "Solar flare"
+  if (p >= 65) return "Golden hour"
+  if (p >= 45) return "Even day"
+  if (p >= 30) return "Soft glow"
+  if (p >= 20) return "Lamp light"
+  if (p >= 10) return "Candlelit"
+  return "Night owl"
+}
+
+function defaultSdrPeak(mon) {
+  var avg = Number(mon && mon.maxAvgLuminance)
+  if (isFinite(avg) && avg >= 80 && avg <= 400) return Math.round(avg)
+  var peak = Number(mon && mon.maxLuminance)
+  if (isFinite(peak) && peak >= 80 && peak <= 400) return Math.round(peak)
+  return 200
 }
 
 function profileOptions(profiles) {
@@ -329,6 +375,10 @@ if (typeof module !== "undefined") {
     normalizeOrigin: normalizeOrigin,
     applyPayload: applyPayload,
     pickMode: pickMode,
-    heroStatus: heroStatus
+    heroStatus: heroStatus,
+    hdrDescription: hdrDescription,
+    defaultSdrPeak: defaultSdrPeak,
+    clampBrightness: clampBrightness,
+    brightnessName: brightnessName
   }
 }

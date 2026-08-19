@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "id": "im0001gt.screens",
   "name": "Screens",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "author": "IM0001GT",
   "license": "MIT",
   "homepage": "https://github.com/IM0001GT/omarchy-screens",
-  "description": "Snap-to-edge monitor layout with HDR, VRR, refresh, and hardware-aware profiles that apply on hotplug",
+  "description": "Snap-to-edge monitor layout with brightness, text size, HDR, VRR, and hardware-aware profiles that apply on hotplug",
   "kinds": [
     "bar-widget"
   ],
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "Screens",
-    "description": "Arrange monitors with snap, then set refresh, HDR, and VRR in the bar. Profiles restore on hotplug.",
+    "description": "Arrange monitors with snap, then set brightness, text size, refresh, HDR, and VRR. Profiles restore on hotplug.",
     "category": "Hardware",
     "defaultSection": "right",
     "allowMultiple": false
