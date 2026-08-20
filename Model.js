@@ -400,6 +400,92 @@ function defaultSdrPeak(mon) {
   return 200
 }
 
+function splitCounts(n, total) {
+  total = total || 10
+  n = Math.round(Number(n) || 0)
+  if (n <= 0) return []
+  if (n >= total) {
+    var padded = []
+    for (var i = 0; i < n; i++) padded.push(i < total ? 1 : 0)
+    return padded
+  }
+  var base = Math.floor(total / n)
+  var extra = total % n
+  var out = []
+  for (var j = 0; j < n; j++) out.push(j < extra ? base + 1 : base)
+  return out
+}
+
+function workspaceHosts(monitors, primary) {
+  var hosts = []
+  for (var i = 0; i < (monitors || []).length; i++) {
+    var m = monitors[i]
+    if (!m || !m.enabled || m.mirror) continue
+    hosts.push(m)
+  }
+  hosts.sort(function(a, b) {
+    var ap = primary && a.identity === primary ? 0 : 1
+    var bp = primary && b.identity === primary ? 0 : 1
+    if (ap !== bp) return ap - bp
+    if (a.x !== b.x) return a.x - b.x
+    if (a.y !== b.y) return a.y - b.y
+    var an = a.name || "", bn = b.name || ""
+    if (an < bn) return -1
+    if (an > bn) return 1
+    return 0
+  })
+  return hosts
+}
+
+function workspacePlan(monitors, primary) {
+  var hosts = workspaceHosts(monitors, primary)
+  var counts = splitCounts(hosts.length, 10)
+  var n = 1
+  var plan = []
+  for (var i = 0; i < hosts.length; i++) {
+    var count = counts[i] || 0
+    var ids = []
+    for (var k = 0; k < count; k++) ids.push(n + k)
+    n += count
+    plan.push({
+      name: hosts[i].name || "",
+      identity: hosts[i].identity || "",
+      label: hosts[i].label || hosts[i].name || "",
+      ids: ids,
+      first: ids.length ? ids[0] : 0,
+      last: ids.length ? ids[ids.length - 1] : 0
+    })
+  }
+  return plan
+}
+
+function planForMonitor(plan, mon) {
+  if (!plan || !mon) return null
+  for (var i = 0; i < plan.length; i++) {
+    if (plan[i].name === mon.name || (mon.identity && plan[i].identity === mon.identity))
+      return plan[i]
+  }
+  return null
+}
+
+function workspaceDigit(id) {
+  var n = Number(id)
+  if (n === 10) return "0"
+  return String(id)
+}
+
+function workspaceRangeLabel(first, last) {
+  if (!first) return ""
+  if (first === last) return workspaceDigit(first)
+  return workspaceDigit(first) + "–" + workspaceDigit(last)
+}
+
+function layoutLabel(mode) {
+  if (mode === "scroll") return "Scroll"
+  if (mode === "float") return "Float"
+  return "Tile"
+}
+
 function profileOptions(profiles) {
   var out = []
   if (!profiles) return out
@@ -430,6 +516,13 @@ if (typeof module !== "undefined") {
     defaultSdrPeak: defaultSdrPeak,
     clampBrightness: clampBrightness,
     brightnessName: brightnessName,
-    lastDisplayQuip: lastDisplayQuip
+    lastDisplayQuip: lastDisplayQuip,
+    splitCounts: splitCounts,
+    workspaceHosts: workspaceHosts,
+    workspacePlan: workspacePlan,
+    planForMonitor: planForMonitor,
+    workspaceDigit: workspaceDigit,
+    workspaceRangeLabel: workspaceRangeLabel,
+    layoutLabel: layoutLabel
   }
 }

@@ -55,6 +55,12 @@ Panel {
   property bool lastDisplayBounce: false
   property int lastDisplayQuipIndex: 0
   property string lastDisplayQuip: ""
+  property bool manageWorkspaces: false
+  property var workspacePlan: []
+  property var workspaceLayouts: ({})
+  property int layoutMenuWorkspace: 0
+  property var layoutMenuAnchor: null
+  property bool layoutMenuOpen: false
   readonly property var textSizeStops: [9, 10, 11, 12, 14, 16, 20]
 
   readonly property var selected: {
@@ -208,6 +214,9 @@ Panel {
     root.matchProfile = (data && data.match) ? String(data.match) : ""
     root.primaryId = (data && data.primary) ? String(data.primary) : ""
     root.hybridGpus = !!(data && data.hybridGpus)
+    root.manageWorkspaces = !!(data && data.manageWorkspaces)
+    root.workspacePlan = (data && data.workspacePlan) ? data.workspacePlan : []
+    root.workspaceLayouts = (data && data.workspaceLayouts) ? data.workspaceLayouts : ({})
     if (data && data.hybridNotice === false) root.showHybridNotice = false
     else if (root.opened && data && data.hybridNotice) root.showHybridNotice = true
     if (root.activeProfile && !root.namingProfile) root.profileName = root.activeProfile
@@ -240,9 +249,10 @@ Panel {
     var key = (data && data.connectedKey) ? String(data.connectedKey) : ""
     var prev = root.lastKey
     if (key) root.lastKey = key
-    if (prev !== "" && key !== "" && prev !== key && root.autoSwitch && root.matchProfile
+    if (prev !== "" && key !== "" && prev !== key
         && !root.opened && !root.dragging && !root.applying) {
-      root.applyProfile(root.matchProfile)
+      if (root.autoSwitch && root.matchProfile) root.applyProfile(root.matchProfile)
+      else if (root.manageWorkspaces) root.syncWorkspaces()
     }
   }
 
@@ -501,6 +511,44 @@ Panel {
     root.runStore(["profile", "primary", root.selected.identity || ""])
   }
 
+  function setManageWorkspaces(on) {
+    root.manageWorkspaces = !!on
+    root.runStore(["workspaces", on ? "on" : "off"])
+  }
+
+  function syncWorkspaces() {
+    root.runStore(["workspaces", "sync"])
+  }
+
+  function setWorkspaceLayout(id, mode) {
+    root.layoutMenuOpen = false
+    if (!id) return
+    root.runStore(["workspace-layout", String(id), mode])
+  }
+
+  function focusWorkspace(id) {
+    if (!id) return
+    focusWsProc.command = [
+      "hyprctl", "eval",
+      "hl.dispatch(hl.dsp.focus({ workspace = \"" + id + "\" }))"
+    ]
+    if (!focusWsProc.running) focusWsProc.running = true
+  }
+
+  function openLayoutMenu(id, anchor) {
+    root.layoutMenuWorkspace = id
+    root.layoutMenuAnchor = anchor
+    root.layoutMenuOpen = true
+  }
+
+  function workspaceDescription() {
+    if (root.enabledCount <= 1)
+      return "Keep workspaces 1–10 on this screen. Right-click a number for Tile, Scroll, or Float."
+    if (root.enabledCount === 2)
+      return "Primary gets 1–5, the next screen gets 6–10. Right-click a number for Tile, Scroll, or Float."
+    return "Split ten workspaces across these screens. Right-click a number for Tile, Scroll, or Float."
+  }
+
   function identify() {
     if (!root.selected) return
     root.identifying = true
@@ -630,6 +678,11 @@ Panel {
         catch (e) { root.refresh() }
       }
     }
+  }
+
+  Process {
+    id: focusWsProc
+    stdout: StdioCollector { waitForEnd: true }
   }
 
   Process {
@@ -1100,8 +1153,22 @@ Panel {
                     width: parent.width - Style.space(8)
 
                     Text {
+                      visible: !root.manageWorkspaces
                       anchors.horizontalCenter: parent.horizontalCenter
                       text: String(index + 1)
+                      color: root.bar.foreground
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.title
+                      font.bold: true
+                    }
+
+                    Text {
+                      visible: root.manageWorkspaces
+                      anchors.horizontalCenter: parent.horizontalCenter
+                      text: {
+                        var p = Model.planForMonitor(root.workspacePlan, mon)
+                        return p ? Model.workspaceRangeLabel(p.first, p.last) : ""
+                      }
                       color: root.bar.foreground
                       font.family: root.bar.fontFamily
                       font.pixelSize: Style.font.title
@@ -1203,8 +1270,71 @@ Panel {
                   root.applyNow()
                 }
               }
+
+              Repeater {
+                model: root.monitors.length
+
+                Item {
+                  id: tileChips
+                  required property int index
+                  readonly property var mon: root.monitors[index]
+                  readonly property var plan: Model.planForMonitor(root.workspacePlan, mon)
+                  visible: root.manageWorkspaces && !!(mon && mon.enabled && plan && plan.ids && plan.ids.length)
+                  x: mon ? canvas.cx(mon.x) : 0
+                  y: mon ? canvas.cy(mon.y) : 0
+                  width: mon ? canvas.cw(mon.logicalW) : 0
+                  height: mon ? canvas.ch(mon.logicalH) : 0
+                  z: 4
+
+                  Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.top: parent.top
+                    anchors.topMargin: Style.space(4)
+                    spacing: Style.space(4)
+
+                    Repeater {
+                      model: tileChips.plan && tileChips.plan.ids ? tileChips.plan.ids : []
+
+                      Text {
+                        required property int modelData
+                        text: Model.workspaceDigit(modelData)
+                        color: root.bar.foreground
+                        font.family: root.bar.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                        opacity: 0.95
+
+                        MouseArea {
+                          anchors.fill: parent
+                          anchors.margins: -Style.space(4)
+                          acceptedButtons: Qt.LeftButton | Qt.RightButton
+                          preventStealing: true
+                          hoverEnabled: true
+                          cursorShape: Qt.PointingHandCursor
+                          onClicked: function(mouse) {
+                            if (mouse.button === Qt.RightButton)
+                              root.openLayoutMenu(modelData, parent)
+                            else
+                              root.focusWorkspace(modelData)
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
             }
 
+          }
+
+          Toggle {
+            width: parent.width
+            label: "Spread workspaces"
+            description: root.workspaceDescription()
+            checked: root.manageWorkspaces
+            foreground: root.bar.foreground
+            fontFamily: root.bar.fontFamily
+            onClicked: root.setManageWorkspaces(!root.manageWorkspaces)
           }
 
           PanelSeparator { foreground: root.bar.foreground }
@@ -1817,6 +1947,28 @@ Panel {
       }
     }
     }
+
+  QtObject {
+    id: layoutMenuOwner
+    function close() { root.layoutMenuOpen = false }
+  }
+
+  Item {
+    id: layoutMenuDummy
+    width: 1
+    height: 1
+    visible: false
+  }
+
+  WorkspaceLayoutMenu {
+    anchorItem: root.layoutMenuAnchor || layoutMenuDummy
+    bar: root.bar
+    owner: layoutMenuOwner
+    open: root.layoutMenuOpen && !!root.layoutMenuAnchor
+    workspaceId: root.layoutMenuWorkspace
+    currentLayout: String(root.workspaceLayouts[String(root.layoutMenuWorkspace)] || "tile")
+    onChosen: function(mode) { root.setWorkspaceLayout(root.layoutMenuWorkspace, mode) }
+  }
 
   PanelWindow {
     id: identWin

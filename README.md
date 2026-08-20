@@ -8,9 +8,9 @@ Click the two-tile mark for a panel that stays open. Displays are drawn at their
   <img width="960" alt="Screens" src="preview.png" />
 </p>
 
-| Layout | This screen | HDR | Profiles |
-| --- | --- | --- | --- |
-| Drag tiles; edges snap | Brightness, text size, resolution, Hz, scale, rotation, mirror, Detect | 8-bit or 10-bit PQ, Tune for black / peak | Name a desk; restore on connect |
+| Layout | This screen | HDR | Profiles | Workspaces |
+| --- | --- | --- | --- | --- |
+| Drag tiles; edges snap | Brightness, text size, resolution, Hz, scale, rotation, mirror, Detect | 8-bit or 10-bit PQ, Tune for black / peak | Name a desk; restore on connect | Optional spread of 1–10; right-click Tile / Scroll / Float |
 
 Works with two screens or a full battlestation. A fallback Hyprland rule still catches anything you hot-plug later. The panel scrolls when it is taller than the screen, so controls stay reachable at large scale (for example 2× on 1080p).
 
@@ -75,6 +75,14 @@ The first time Screens sees `~/.config/hypr/monitors.lua`, it copies that file t
 - HDR and VRR disable themselves when that panel cannot do them
 - VRR modes: Off, Always, Fullscreen, Games & video. Always + HDR can flicker on some OLEDs; Fullscreen or Games & video is the usual workaround
 
+**Workspaces**
+
+- **Spread workspaces** pins ten workspaces across the screens that are on and not mirroring
+- Two screens: primary gets **1–5**, the next screen gets **6–10**. More screens split the ten as evenly as possible (a leftover slot goes to the first screens). Nine screens means one gets two workspaces and the rest get one
+- **Make primary** chooses which screen receives the first group
+- Each display's bar then shows only that screen's numbers. **Left-click** a number to go there. **Right-click** that same number for a menu: **Tile**, **Scroll**, or **Float**. The choice applies only to that workspace
+- Turning the toggle off restores Omarchy's stock workspace widget and leaves windows where they are
+
 **Profiles**
 
 - **Save** names the current layout. Click the profile name (or **Apply**) to write it. Two or more profiles become a dropdown
@@ -130,13 +138,16 @@ Hyprland HDR is PQ (`cm = hdr` or `hdredid`) at 8-bit or 10-bit. There is no HLG
 ## Layout
 
 ```text
-manifest.json          Omarchy plugin manifest (must live at repo root)
-Screens.qml            Bar icon + click panel
-ScreenMark.qml         Two-tile bar/hero mark
-Model.js               Snap / normalize / mode helpers
-scripts/display-ctl    hyprctl snapshot + monitors.lua writer
-preview.png            Marketplace still
-install.sh             Enable / place the widget
+manifest.json            Omarchy plugin manifest (must live at repo root)
+Screens.qml              Bar icon + click panel
+ScreenMark.qml           Two-tile bar/hero mark
+Workspaces.qml           Per-display workspace numbers (right-click layout)
+WorkspaceLayoutMenu.qml  Tile / Scroll / Float picker
+Service.qml              Registers the workspace widget
+Model.js                 Snap / normalize / workspace split helpers
+scripts/display-ctl      hyprctl snapshot + monitors.lua writer
+preview.png              Marketplace still
+install.sh               Enable / place the widget
 ```
 
 The repo root **is** the plugin. That is what `omarchy plugin add` and `omarchy plugin validate` expect.

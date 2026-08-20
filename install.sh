@@ -62,6 +62,9 @@ copy_plugin_files() {
   install -m 0644 "$SCRIPT_DIR/Screens.qml" "$plugin_dir/Screens.qml"
   install -m 0644 "$SCRIPT_DIR/ScreenMark.qml" "$plugin_dir/ScreenMark.qml"
   install -m 0644 "$SCRIPT_DIR/Model.js" "$plugin_dir/Model.js"
+  install -m 0644 "$SCRIPT_DIR/Workspaces.qml" "$plugin_dir/Workspaces.qml"
+  install -m 0644 "$SCRIPT_DIR/WorkspaceLayoutMenu.qml" "$plugin_dir/WorkspaceLayoutMenu.qml"
+  install -m 0644 "$SCRIPT_DIR/Service.qml" "$plugin_dir/Service.qml"
   install -m 0755 "$SCRIPT_DIR/scripts/display-ctl" "$plugin_dir/scripts/display-ctl"
   install -m 0755 "$SCRIPT_DIR/scripts/omarchy-brightness-display" "$plugin_dir/scripts/omarchy-brightness-display"
   install -m 0755 "$SCRIPT_DIR/scripts/display-wake" "$plugin_dir/scripts/display-wake" 2>/dev/null || true
