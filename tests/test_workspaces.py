@@ -109,5 +109,102 @@ class LayoutNames(unittest.TestCase):
         self.assertEqual(self.ctl.clean_workspace_layout("nope"), "")
 
 
+class LeftoverMonitorsLua(unittest.TestCase):
+    def setUp(self):
+        self.ctl = load_ctl()
+
+    def test_stock_header_plus_managed_block_is_leftover(self):
+        text = """local omarchy_gdk_scale = 4
+local omarchy_monitor_scale = 4
+hl.env("GDK_SCALE", tostring(omarchy_gdk_scale))
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = omarchy_monitor_scale })
+
+-- BEGIN im0001gt.screens
+hl.monitor({ output = "eDP-1", mode = "1920x1200@60", position = "0x0", scale = 1.0, vrr = 0 })
+-- END im0001gt.screens
+"""
+        self.assertTrue(self.ctl.leftover_outside_managed(text))
+
+    def test_screens_owned_file_is_clean(self):
+        text = """-- Managed by im0001gt.screens (Screens bar panel).
+
+local omarchy_gdk_scale = 2
+hl.env("GDK_SCALE", tostring(omarchy_gdk_scale))
+
+-- BEGIN im0001gt.screens
+hl.monitor({ output = "eDP-1", mode = "1920x1200@60", position = "0x0", scale = 1.0, vrr = 0 })
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })
+-- END im0001gt.screens
+"""
+        self.assertFalse(self.ctl.leftover_outside_managed(text))
+
+    def test_hyprmoncfg_comment_counts(self):
+        text = "-- written by hyprmoncfg\nhl.monitor({ output = \"DP-1\" })\n"
+        self.assertTrue(self.ctl.leftover_outside_managed(text))
+
+
+class FreshWrite(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.ctl = load_ctl()
+        self.tmp = tempfile.mkdtemp()
+        self.ctl.MONITORS_LUA = os.path.join(self.tmp, "monitors.lua")
+        self.ctl.BACKUP_DIR = os.path.join(self.tmp, "state")
+        self.ctl.ORIGINAL_BACKUP = os.path.join(self.ctl.BACKUP_DIR, "original-monitors.lua")
+        leftover = """local omarchy_gdk_scale = 4
+local omarchy_monitor_scale = 4
+hl.env("GDK_SCALE", tostring(omarchy_gdk_scale))
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = omarchy_monitor_scale })
+
+-- BEGIN im0001gt.screens
+hl.monitor({ output = "eDP-1", mode = "1920x1200@60", position = "0x0", scale = 1.0, vrr = 0 })
+-- END im0001gt.screens
+"""
+        os.makedirs(os.path.dirname(self.ctl.MONITORS_LUA), exist_ok=True)
+        with open(self.ctl.MONITORS_LUA, "w", encoding="utf-8") as fh:
+            fh.write(leftover)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_write_replaces_leftover_and_backs_up(self):
+        monitors = [{
+            "name": "eDP-1",
+            "mode": "1920x1200@59.95",
+            "x": 0,
+            "y": 0,
+            "scale": 1.0,
+            "enabled": True,
+            "vrr": 0,
+        }]
+        text = self.ctl.write_monitors_lua(monitors)
+        self.assertNotIn("omarchy_monitor_scale", text)
+        self.assertIn("BEGIN im0001gt.screens", text)
+        self.assertIn("eDP-1", text)
+        self.assertTrue(os.path.isfile(self.ctl.ORIGINAL_BACKUP))
+        with open(self.ctl.ORIGINAL_BACKUP, encoding="utf-8") as fh:
+            original = fh.read()
+        self.assertIn("omarchy_monitor_scale", original)
+
+
+class ScaleSteps(unittest.TestCase):
+    def setUp(self):
+        self.ctl = load_ctl()
+
+    def test_up_from_one(self):
+        self.assertEqual(self.ctl.next_scale_preset(1, 1920, 1200, "up"), 1.25)
+
+    def test_down_from_one_stays(self):
+        self.assertEqual(self.ctl.next_scale_preset(1, 1920, 1200, "down"), 1)
+
+    def test_bindings_rebind_slash(self):
+        block = self.ctl.scale_bindings_block()
+        self.assertIn('hl.unbind("SUPER + SLASH")', block)
+        self.assertIn('hl.unbind("SUPER + ALT + SLASH")', block)
+        self.assertIn("scale up", block)
+        self.assertIn("scale down", block)
+
+
 if __name__ == "__main__":
     unittest.main()

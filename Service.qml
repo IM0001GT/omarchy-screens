@@ -1,4 +1,6 @@
 import QtQuick
+import Quickshell
+import Quickshell.Io
 
 Item {
   id: root
@@ -6,9 +8,20 @@ Item {
   property var manifest: null
   property var shell: null
   property var component: null
+  readonly property string ctl:
+    Quickshell.env("HOME") + "/.config/omarchy/plugins/im0001gt.screens/scripts/display-ctl"
 
-  Component.onCompleted: registerWidget()
+  Component.onCompleted: {
+    registerWidget()
+    if (!claimProc.running) claimProc.running = true
+  }
   onBarWidgetRegistryChanged: registerWidget()
+
+  Process {
+    id: claimProc
+    command: [root.ctl, "claim"]
+    stdout: StdioCollector { waitForEnd: true }
+  }
 
   function registerWidget() {
     if (!root.barWidgetRegistry) return

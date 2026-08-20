@@ -109,6 +109,46 @@ if [[ -x $ctl ]] && run_as_user "$ctl" backup-original >/dev/null; then
   echo "Kept your current monitors.lua at ~/.local/state/im0001gt.screens/original-monitors.lua"
 fi
 
+confirm() {
+  local prompt="$1"
+  if [[ -t 0 && -t 1 ]] && command -v gum >/dev/null 2>&1; then
+    gum confirm "$prompt"
+    return
+  fi
+  if [[ -t 0 && -t 1 ]]; then
+    local reply=""
+    read -r -p "$prompt [y/N] " reply
+    [[ $reply == y || $reply == Y || $reply == yes ]]
+    return
+  fi
+  return 1
+}
+
+if [[ -x $ctl ]]; then
+  if conflict_json=$(run_as_user "$ctl" conflicts --check 2>/dev/null); then
+    :
+  else
+    echo
+    echo "hyprmoncfg is still installed. It stays in control of screen settings"
+    echo "until it is removed — Screens will yield until then."
+    if [[ -n $conflict_json ]]; then
+      echo "$conflict_json" | jq -r '.message // empty' 2>/dev/null || true
+    fi
+    echo
+    if confirm "Remove the hyprmoncfg plugin and stop its daemon now?"; then
+      run_as_user "$ctl" conflicts remove || \
+        echo "warning: could not fully remove hyprmoncfg; Screens will keep yielding." >&2
+    else
+      echo "Leaving hyprmoncfg in place. Remove it later with:"
+      echo "  omarchy plugin remove crmne.hyprmoncfg"
+      echo "  systemctl --user disable --now hyprmoncfgd.service"
+    fi
+  fi
+  echo "Taking over monitors.lua from the live layout (original stays in the backup) ..."
+  run_as_user "$ctl" claim >/dev/null || \
+    echo "warning: could not claim monitors.lua yet; open Screens once after the shell restarts." >&2
+fi
+
 run_as_user omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
 
 discovered=0
@@ -133,9 +173,10 @@ reload_shell
 
 echo
 echo "Done. Screens is a bar widget — click the two-tile icon."
-echo "  Drag tiles to arrange. They snap flush."
+echo "  Drag tiles to arrange. Edges snap flush; stacked tiles also get a light center snap."
 echo "  Per screen: brightness, resolution, refresh, HDR, VRR, scale, rotation."
 echo "  Desktop: text size."
+echo "  Scale keys: Super+/ up, Super+Alt+/ down."
 echo "  Uninstall: omarchy plugin remove $PLUGIN_ID"
 echo "  Restore pre-Screens monitors.lua:"
 echo "    $plugin_dir/scripts/display-ctl restore-original"

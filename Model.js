@@ -147,6 +147,7 @@ function snapMove(monitors, index, x, y, threshold) {
   var moving = monitors[index]
   if (!moving) return { x: x, y: y, guideX: null, guideY: null }
   var thresh = Math.max(24, Number(threshold) || 80)
+  var centerThresh = Math.max(16, Math.min(36, Math.round(thresh * 0.33)))
   var w = logicalW(moving)
   var h = logicalH(moving)
   var bestX = { dist: thresh + 1, value: x, guide: null }
@@ -160,6 +161,11 @@ function snapMove(monitors, index, x, y, threshold) {
   function considerY(value, dist, guide) {
     if (dist <= bestY.dist) {
       bestY = { dist: dist, value: value, guide: guide }
+    }
+  }
+  function considerCenterX(value, dist, guide) {
+    if (dist <= centerThresh && dist <= bestX.dist) {
+      bestX = { dist: dist, value: value, guide: guide }
     }
   }
 
@@ -185,6 +191,12 @@ function snapMove(monitors, index, x, y, threshold) {
     }
     for (var d = 0; d < candsY.length; d++) {
       considerY(candsY[d].value, Math.abs(y - candsY[d].value), candsY[d].guide)
+    }
+    var above = Math.abs((y + h) - o.y)
+    var below = Math.abs(y - (o.y + oh))
+    if (Math.min(above, below) <= thresh) {
+      var centered = o.x + (ow - w) / 2
+      considerCenterX(centered, Math.abs(x - centered), o.x + ow / 2)
     }
   }
 

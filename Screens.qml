@@ -45,6 +45,8 @@ Panel {
   property var standbyNames: []
   property bool hybridGpus: false
   property bool showHybridNotice: false
+  property var conflict: null
+  property bool conflictDismissed: false
   property bool hdrTuning: false
   property int brightnessPercent: 0
   property int pendingBrightnessPercent: 0
@@ -219,6 +221,10 @@ Panel {
     root.workspaceLayouts = (data && data.workspaceLayouts) ? data.workspaceLayouts : ({})
     if (data && data.hybridNotice === false) root.showHybridNotice = false
     else if (root.opened && data && data.hybridNotice) root.showHybridNotice = true
+    if (data && data.conflict && data.conflict.present !== false)
+      root.conflict = data.conflict
+    else
+      root.conflict = null
     if (root.activeProfile && !root.namingProfile) root.profileName = root.activeProfile
     if (root.detectPending) {
       root.detectPending = false
@@ -503,6 +509,16 @@ Panel {
   function dismissHybridNotice() {
     root.showHybridNotice = false
     root.runStore(["idle", "notice"])
+  }
+
+  function dismissConflict() {
+    root.conflictDismissed = true
+  }
+
+  function removeConflict() {
+    if (storeProc.running) return
+    storeProc.command = [root.ctl, "conflicts", "remove"]
+    storeProc.running = true
   }
 
   function setPrimary() {
@@ -865,6 +881,49 @@ Panel {
                 verticalPadding: Style.space(4)
                 enabled: !!(root.selected && root.selected.enabled && root.identifyScreen)
                 onClicked: root.identify()
+              }
+            }
+          }
+
+          Column {
+            visible: !!(root.conflict && !root.conflictDismissed)
+            width: parent.width
+            spacing: Style.space(8)
+
+            Text {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: (root.conflict && root.conflict.message)
+                ? root.conflict.message
+                : "hyprmoncfg is still installed and will keep control of screen settings until it is removed."
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Row {
+              spacing: Style.space(6)
+
+              Button {
+                text: "Remove hyprmoncfg"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(4)
+                onClicked: root.removeConflict()
+              }
+
+              Button {
+                text: "Keep both"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(4)
+                onClicked: root.dismissConflict()
               }
             }
           }
