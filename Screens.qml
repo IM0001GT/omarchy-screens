@@ -538,15 +538,17 @@ Panel {
 
   function setWorkspaceLayout(id, mode) {
     root.layoutMenuOpen = false
-    if (!id) return
-    root.runStore(["workspace-layout", String(id), mode])
+    var n = Model.workspaceId(id)
+    if (!n) return
+    root.runStore(["workspace-layout", String(n), mode])
   }
 
   function focusWorkspace(id) {
-    if (!id) return
+    var n = Model.workspaceId(id)
+    if (!n) return
     focusWsProc.command = [
       "hyprctl", "eval",
-      "hl.dispatch(hl.dsp.focus({ workspace = \"" + id + "\" }))"
+      "hl.dispatch(hl.dsp.focus({ workspace = \"" + n + "\" }))"
     ]
     if (!focusWsProc.running) focusWsProc.running = true
   }

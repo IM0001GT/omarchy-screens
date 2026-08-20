@@ -480,10 +480,17 @@ function planForMonitor(plan, mon) {
   return null
 }
 
+function workspaceId(id) {
+  var text = String(id == null ? "" : id).trim()
+  if (text !== "10" && !/^[1-9]$/.test(text)) return 0
+  return parseInt(text, 10)
+}
+
 function workspaceDigit(id) {
-  var n = Number(id)
+  var n = workspaceId(id)
+  if (!n) return ""
   if (n === 10) return "0"
-  return String(id)
+  return String(n)
 }
 
 function workspaceRangeLabel(first, last) {
@@ -533,6 +540,7 @@ if (typeof module !== "undefined") {
     workspaceHosts: workspaceHosts,
     workspacePlan: workspacePlan,
     planForMonitor: planForMonitor,
+    workspaceId: workspaceId,
     workspaceDigit: workspaceDigit,
     workspaceRangeLabel: workspaceRangeLabel,
     layoutLabel: layoutLabel

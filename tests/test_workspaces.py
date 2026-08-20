@@ -188,6 +188,67 @@ hl.monitor({ output = "eDP-1", mode = "1920x1200@60", position = "0x0", scale = 
         self.assertIn("omarchy_monitor_scale", original)
 
 
+class StockBackups(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.ctl = load_ctl()
+        self.tmp = tempfile.mkdtemp()
+        self.ctl.BACKUP_DIR = os.path.join(self.tmp, "state")
+        self.ctl.ORIGINAL_BACKUP = os.path.join(self.ctl.BACKUP_DIR, "original-monitors.lua")
+        self.ctl.MONITORS_LUA = os.path.join(self.tmp, "hypr", "monitors.lua")
+        self.ctl.BINDINGS_LUA = os.path.join(self.tmp, "hypr", "bindings.lua")
+        self.ctl.SHELL_JSON = os.path.join(self.tmp, "omarchy", "shell.json")
+        self.ctl.LAYOUTS_DIR = os.path.join(self.tmp, "layouts")
+        self.ctl.BRIGHTNESS_LINK = os.path.join(self.tmp, "bin", "omarchy-brightness-display")
+        os.makedirs(os.path.join(self.tmp, "hypr"), exist_ok=True)
+        os.makedirs(os.path.join(self.tmp, "omarchy"), exist_ok=True)
+        os.makedirs(os.path.join(self.tmp, "layouts"), exist_ok=True)
+        os.makedirs(os.path.join(self.tmp, "bin"), exist_ok=True)
+        with open(self.ctl.MONITORS_LUA, "w", encoding="utf-8") as fh:
+            fh.write('hl.monitor({ output = "eDP-1" })\n')
+        with open(self.ctl.BINDINGS_LUA, "w", encoding="utf-8") as fh:
+            fh.write('-- personal binds\no.bind("SUPER + B", "Browser")\n')
+        with open(self.ctl.SHELL_JSON, "w", encoding="utf-8") as fh:
+            fh.write('{"bar":{"layout":{"left":[{"id":"omarchy.workspaces"}]}}}\n')
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_backup_then_restore_stock_files(self):
+        self.ctl.ensure_stock_backups()
+        orig = self.ctl.originals_dir()
+        self.assertTrue(os.path.isfile(os.path.join(orig, "monitors.lua")))
+        self.assertTrue(os.path.isfile(os.path.join(orig, "bindings.lua")))
+        self.assertTrue(os.path.isfile(os.path.join(orig, "shell.json")))
+        self.assertTrue(os.path.isfile(self.ctl.restore_helper_path()))
+        with open(self.ctl.BINDINGS_LUA, "w", encoding="utf-8") as fh:
+            fh.write("-- BEGIN im0001gt.screens\no.bind(\"SUPER + SLASH\", \"x\")\n-- END im0001gt.screens\n")
+        with open(self.ctl.MONITORS_LUA, "w", encoding="utf-8") as fh:
+            fh.write("-- Managed by screens\n")
+        with open(self.ctl.SHELL_JSON, "w", encoding="utf-8") as fh:
+            fh.write('{"bar":{"layout":{"left":[{"id":"im0001gt.screens.workspaces"}]}}}\n')
+        rc = self.ctl.restore_original()
+        self.assertEqual(rc, 0)
+        with open(self.ctl.MONITORS_LUA, encoding="utf-8") as fh:
+            self.assertIn("eDP-1", fh.read())
+        with open(self.ctl.BINDINGS_LUA, encoding="utf-8") as fh:
+            bindings = fh.read()
+        self.assertIn("SUPER + B", bindings)
+        self.assertNotIn("BEGIN im0001gt.screens", bindings)
+        with open(self.ctl.SHELL_JSON, encoding="utf-8") as fh:
+            self.assertIn("omarchy.workspaces", fh.read())
+
+    def test_bindings_backup_strips_managed_block(self):
+        with open(self.ctl.BINDINGS_LUA, "w", encoding="utf-8") as fh:
+            fh.write("-- keep\n-- BEGIN im0001gt.screens\nBAD\n-- END im0001gt.screens\n")
+        self.ctl.ensure_stock_backups()
+        with open(os.path.join(self.ctl.originals_dir(), "bindings.lua"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("keep", text)
+        self.assertNotIn("BAD", text)
+
+
 class ScaleSteps(unittest.TestCase):
     def setUp(self):
         self.ctl = load_ctl()

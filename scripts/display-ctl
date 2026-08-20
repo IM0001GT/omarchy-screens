@@ -15,8 +15,8 @@ Commands:
   workspaces on|off|sync
   workspace-layout <id> tile|scroll|float
   idle off|on|notice
-  backup-original    snapshot monitors.lua once, before Screens writes it
-  restore-original   put that first snapshot back and reload Hyprland
+  backup-original    snapshot stock files once, before Screens writes them
+  restore-original   put those first snapshots back and reload Hyprland
   claim              backup leftover config, take over monitors.lua, restore scale keys
   conflicts          show hyprmoncfg / other display managers still in control
   conflicts remove   remove the hyprmoncfg plugin and stop its daemon
@@ -42,6 +42,7 @@ ORIGINAL_BACKUP = os.path.join(BACKUP_DIR, "original-monitors.lua")
 WORKSPACES_JSON = os.path.join(BACKUP_DIR, "workspaces.json")
 LAYOUTS_DIR = os.path.expanduser("~/.local/state/omarchy/workspace-layouts")
 SHELL_JSON = os.path.expanduser("~/.config/omarchy/shell.json")
+BRIGHTNESS_LINK = os.path.expanduser("~/.local/bin/omarchy-brightness-display")
 PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CTL_PATH = os.path.abspath(__file__)
 MANAGED_BEGIN = "-- BEGIN im0001gt.screens"
@@ -900,12 +901,16 @@ def notice_seen():
 
 
 def save_store(store):
-    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    ensure_private_dir(BACKUP_DIR)
     tmp = PROFILES_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(store, fh, indent=2)
         fh.write("\n")
     os.replace(tmp, PROFILES_PATH)
+    try:
+        os.chmod(PROFILES_PATH, 0o600)
+    except OSError:
+        pass
 
 
 def find_profile(store, name):
@@ -1265,12 +1270,47 @@ def read_text(path):
         return ""
 
 
-def write_original_backup(text):
-    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
-    tmp = ORIGINAL_BACKUP + ".tmp"
+def originals_dir():
+    return os.path.join(BACKUP_DIR, "originals")
+
+
+def originals_manifest_path():
+    return os.path.join(originals_dir(), "manifest.json")
+
+
+def restore_helper_path():
+    return os.path.join(BACKUP_DIR, "restore.sh")
+
+
+def ensure_private_dir(path):
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
+def write_private_file(path, data):
+    ensure_private_dir(os.path.dirname(path) or ".")
+    tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(text)
-    os.replace(tmp, ORIGINAL_BACKUP)
+        fh.write(data)
+        fh.flush()
+        try:
+            os.fsync(fh.fileno())
+        except OSError:
+            pass
+    os.replace(tmp, path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return True
+
+
+def write_original_backup(text):
+    write_private_file(ORIGINAL_BACKUP, text)
+    write_private_file(os.path.join(originals_dir(), "monitors.lua"), text)
     return True
 
 
@@ -1280,7 +1320,7 @@ def strip_managed_block(text):
         return text
     pre = text.split(MANAGED_BEGIN, 1)[0]
     post = text.split(MANAGED_END, 1)[1] if MANAGED_END in text else ""
-    return pre + post
+    return (pre.rstrip() + ("\n" + post.lstrip("\n") if post.strip() else "\n")).lstrip("\n")
 
 
 def leftover_outside_managed(text):
@@ -1297,27 +1337,261 @@ def leftover_outside_managed(text):
     return bool((text or "").strip()) and not looks_managed(text)
 
 
-def ensure_original_backup(text=None):
-    """Snapshot monitors.lua once, before Screens writes it. Never overwrite."""
-    if os.path.isfile(ORIGINAL_BACKUP):
+def load_originals_manifest():
+    data = {
+        "version": 1,
+        "files": {},
+        "workspaceLayouts": {},
+        "brightnessLink": {},
+    }
+    try:
+        with open(originals_manifest_path(), encoding="utf-8") as fh:
+            raw = json.load(fh)
+        if isinstance(raw, dict):
+            data["files"] = raw.get("files") if isinstance(raw.get("files"), dict) else {}
+            data["workspaceLayouts"] = (
+                raw.get("workspaceLayouts") if isinstance(raw.get("workspaceLayouts"), dict) else {}
+            )
+            data["brightnessLink"] = (
+                raw.get("brightnessLink") if isinstance(raw.get("brightnessLink"), dict) else {}
+            )
+    except (OSError, json.JSONDecodeError):
+        pass
+    return data
+
+
+def save_originals_manifest(data):
+    write_private_file(originals_manifest_path(), json.dumps(data, indent=2) + "\n")
+
+
+def capture_text_original(key, dest_name, text, present):
+    manifest = load_originals_manifest()
+    files = manifest.setdefault("files", {})
+    if key in files:
         return False
+    dest = os.path.join(originals_dir(), dest_name)
+    if present and (text or "").strip():
+        write_private_file(dest, text)
+    files[key] = {"present": bool(present and (text or "").strip()), "name": dest_name}
+    save_originals_manifest(manifest)
+    return True
+
+
+def monitors_original_text(text=None):
+    if os.path.isfile(ORIGINAL_BACKUP):
+        return read_text(ORIGINAL_BACKUP)
+    nested = os.path.join(originals_dir(), "monitors.lua")
+    if os.path.isfile(nested):
+        return read_text(nested)
     if text is None:
         text = read_text(MONITORS_LUA) if os.path.isfile(MONITORS_LUA) else ""
     if text.strip() and not looks_managed(text):
-        return write_original_backup(text)
+        return text
     for path in sorted(glob.glob(os.path.join(BACKUP_DIR, STAMPED_BACKUP_GLOB))):
         body = read_text(path)
         if body.strip() and not looks_managed(body):
-            return write_original_backup(body)
-    if text.strip():
-        return write_original_backup(text)
-    return False
+            return body
+    return text or ""
+
+
+def capture_monitors_original(text=None):
+    if os.path.isfile(ORIGINAL_BACKUP) or os.path.isfile(os.path.join(originals_dir(), "monitors.lua")):
+        if os.path.isfile(ORIGINAL_BACKUP) and not os.path.isfile(os.path.join(originals_dir(), "monitors.lua")):
+            write_private_file(os.path.join(originals_dir(), "monitors.lua"), read_text(ORIGINAL_BACKUP))
+        manifest = load_originals_manifest()
+        if "monitors.lua" not in manifest.get("files", {}):
+            manifest.setdefault("files", {})["monitors.lua"] = {"present": True, "name": "monitors.lua"}
+            save_originals_manifest(manifest)
+        return False
+    body = monitors_original_text(text)
+    if not (body or "").strip():
+        capture_text_original("monitors.lua", "monitors.lua", "", False)
+        return False
+    write_original_backup(body)
+    manifest = load_originals_manifest()
+    manifest.setdefault("files", {})["monitors.lua"] = {"present": True, "name": "monitors.lua"}
+    save_originals_manifest(manifest)
+    return True
+
+
+def capture_bindings_original():
+    dest = os.path.join(originals_dir(), "bindings.lua")
+    if os.path.isfile(dest):
+        return False
+    present = os.path.isfile(BINDINGS_LUA)
+    text = read_text(BINDINGS_LUA) if present else ""
+    if looks_managed(text):
+        text = strip_managed_block(text)
+    return capture_text_original("bindings.lua", "bindings.lua", text, present)
+
+
+def reconstructed_shell_original():
+    config = load_shell_json()
+    if not config:
+        return "", False
+    section, index, eid, entry = find_workspaces_slot(config)
+    store = load_store()
+    if eid == OUR_WS_WIDGET:
+        old_id = store.get("workspacesBarId") or STOCK_WS_WIDGET
+        if isinstance(entry, str):
+            config["bar"]["layout"][section][index] = old_id
+        elif isinstance(entry, dict):
+            next_entry = dict(entry)
+            next_entry["id"] = old_id
+            config["bar"]["layout"][section][index] = next_entry
+    return json.dumps(config, indent=2) + "\n", True
+
+
+def capture_shell_original():
+    dest = os.path.join(originals_dir(), "shell.json")
+    if os.path.isfile(dest):
+        return False
+    if not os.path.isfile(SHELL_JSON):
+        return capture_text_original("shell.json", "shell.json", "", False)
+    text = read_text(SHELL_JSON)
+    if OUR_WS_WIDGET in text:
+        reconstructed, present = reconstructed_shell_original()
+        if present:
+            text = reconstructed
+    return capture_text_original("shell.json", "shell.json", text, True)
+
+
+def capture_workspace_layouts():
+    manifest = load_originals_manifest()
+    layouts = manifest.setdefault("workspaceLayouts", {})
+    changed = False
+    layout_dir = os.path.join(originals_dir(), "workspace-layouts")
+    for i in range(1, WORKSPACE_COUNT + 1):
+        key = str(i)
+        if key in layouts:
+            continue
+        src = os.path.join(LAYOUTS_DIR, "%d.lua" % i)
+        if os.path.isfile(src):
+            write_private_file(os.path.join(layout_dir, "%d.lua" % i), read_text(src))
+            layouts[key] = "present"
+        else:
+            layouts[key] = "absent"
+        changed = True
+    if changed:
+        save_originals_manifest(manifest)
+    return changed
+
+
+def capture_brightness_link():
+    manifest = load_originals_manifest()
+    if manifest.get("brightnessLink"):
+        return False
+    path = BRIGHTNESS_LINK
+    info = {"path": path, "state": "absent", "previous": ""}
+    if os.path.islink(path):
+        previous = os.readlink(path)
+        if "im0001gt.screens" in previous:
+            info["state"] = "absent"
+            info["previous"] = ""
+        else:
+            info["state"] = "replaced"
+            info["previous"] = previous
+    elif os.path.exists(path):
+        info["state"] = "replaced"
+        info["previous"] = ""
+    else:
+        info["state"] = "absent"
+    manifest["brightnessLink"] = info
+    save_originals_manifest(manifest)
+    return True
+
+
+def write_restore_helper():
+    script = """#!/bin/bash
+# First-install restore for Screens. Lives outside the plugin so it still
+# works after: omarchy plugin remove im0001gt.screens
+set -euo pipefail
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/im0001gt.screens"
+ORIG="$STATE/originals"
+MANIFEST="$ORIG/manifest.json"
+if [[ ! -f $MANIFEST ]]; then
+  echo "restore: no first-install snapshot at $ORIG" >&2
+  exit 2
+fi
+python3 - "$ORIG" "$MANIFEST" <<'PY'
+import json, os, shutil, sys
+orig, manifest_path = sys.argv[1], sys.argv[2]
+home = os.path.expanduser("~")
+with open(manifest_path, encoding="utf-8") as fh:
+    manifest = json.load(fh)
+files = {
+    "monitors.lua": os.path.join(home, ".config/hypr/monitors.lua"),
+    "bindings.lua": os.path.join(home, ".config/hypr/bindings.lua"),
+    "shell.json": os.path.join(home, ".config/omarchy/shell.json"),
+}
+for key, dest in files.items():
+    meta = (manifest.get("files") or {}).get(key) or {}
+    src = os.path.join(orig, meta.get("name") or key)
+    if meta.get("present") and os.path.isfile(src):
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copy2(src, dest)
+    elif meta and not meta.get("present") and os.path.isfile(dest) and key != "shell.json":
+        if key == "bindings.lua":
+            pass
+layouts = os.path.join(home, ".local/state/omarchy/workspace-layouts")
+for key, state in (manifest.get("workspaceLayouts") or {}).items():
+    dest = os.path.join(layouts, "%s.lua" % key)
+    src = os.path.join(orig, "workspace-layouts", "%s.lua" % key)
+    if state == "present" and os.path.isfile(src):
+        os.makedirs(layouts, exist_ok=True)
+        shutil.copy2(src, dest)
+    elif state == "absent" and os.path.isfile(dest):
+        os.unlink(dest)
+link = manifest.get("brightnessLink") or {}
+path = os.path.expanduser(link.get("path") or "")
+if path:
+    previous = link.get("previous") or ""
+    if link.get("state") == "absent" and os.path.islink(path):
+        os.unlink(path)
+    elif link.get("state") == "replaced" and previous:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.lexists(path):
+            os.unlink(path)
+        os.symlink(previous, path)
+print("Restored first-install Hyprland and Omarchy files from", orig)
+PY
+hyprctl reload >/dev/null 2>&1 || true
+"""
+    ensure_private_dir(BACKUP_DIR)
+    path = restore_helper_path()
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(script)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+    return path
+
+
+def ensure_stock_backups(monitors_text=None):
+    """Snapshot every stock file Screens may change. Never overwrite."""
+    ensure_private_dir(BACKUP_DIR)
+    ensure_private_dir(originals_dir())
+    capture_monitors_original(monitors_text)
+    capture_bindings_original()
+    capture_shell_original()
+    capture_workspace_layouts()
+    capture_brightness_link()
+    write_restore_helper()
+    return os.path.isfile(ORIGINAL_BACKUP) or os.path.isfile(
+        os.path.join(originals_dir(), "monitors.lua")
+    )
+
+
+def ensure_original_backup(text=None):
+    """Snapshot monitors.lua once, before Screens writes it. Never overwrite."""
+    return ensure_stock_backups(monitors_text=text)
 
 
 def backup_file(path):
     if not os.path.isfile(path):
         return
-    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    ensure_private_dir(BACKUP_DIR)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dest = os.path.join(BACKUP_DIR, "monitors.lua.%s" % stamp)
     shutil.copy2(path, dest)
@@ -1329,15 +1603,75 @@ def backup_file(path):
             pass
 
 
+def restore_stock_file(dest, src, present):
+    if present and os.path.isfile(src):
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copy2(src, dest)
+        return True
+    return False
+
+
 def restore_original():
-    if not os.path.isfile(ORIGINAL_BACKUP):
-        print("restore-original: no first-install snapshot at %s" % ORIGINAL_BACKUP, file=sys.stderr)
-        return 2
-    if os.path.isfile(MONITORS_LUA):
-        backup_file(MONITORS_LUA)
-    shutil.copy2(ORIGINAL_BACKUP, MONITORS_LUA)
+    ensure_stock_backups()
+    orig = originals_dir()
+    manifest = load_originals_manifest()
+    restored = []
+    monitors_src = os.path.join(orig, "monitors.lua")
+    if not os.path.isfile(monitors_src) and os.path.isfile(ORIGINAL_BACKUP):
+        monitors_src = ORIGINAL_BACKUP
+    if os.path.isfile(monitors_src):
+        if os.path.isfile(MONITORS_LUA):
+            backup_file(MONITORS_LUA)
+        os.makedirs(os.path.dirname(MONITORS_LUA), exist_ok=True)
+        shutil.copy2(monitors_src, MONITORS_LUA)
+        restored.append(MONITORS_LUA)
+    files = manifest.get("files") or {}
+    bindings_meta = files.get("bindings.lua") or {}
+    if restore_stock_file(
+        BINDINGS_LUA,
+        os.path.join(orig, bindings_meta.get("name") or "bindings.lua"),
+        bindings_meta.get("present", os.path.isfile(os.path.join(orig, "bindings.lua"))),
+    ):
+        restored.append(BINDINGS_LUA)
+    elif os.path.isfile(BINDINGS_LUA) and looks_managed(read_text(BINDINGS_LUA)):
+        write_private_file(BINDINGS_LUA, strip_managed_block(read_text(BINDINGS_LUA)))
+        restored.append(BINDINGS_LUA)
+    shell_meta = files.get("shell.json") or {}
+    if restore_stock_file(
+        SHELL_JSON,
+        os.path.join(orig, shell_meta.get("name") or "shell.json"),
+        shell_meta.get("present", os.path.isfile(os.path.join(orig, "shell.json"))),
+    ):
+        restored.append(SHELL_JSON)
+    for key, state in (manifest.get("workspaceLayouts") or {}).items():
+        dest = os.path.join(LAYOUTS_DIR, "%s.lua" % key)
+        src = os.path.join(orig, "workspace-layouts", "%s.lua" % key)
+        if state == "present" and os.path.isfile(src):
+            os.makedirs(LAYOUTS_DIR, exist_ok=True)
+            shutil.copy2(src, dest)
+            restored.append(dest)
+        elif state == "absent" and os.path.isfile(dest):
+            os.unlink(dest)
+            restored.append(dest)
+    link = manifest.get("brightnessLink") or {}
+    path = os.path.expanduser(link.get("path") or BRIGHTNESS_LINK)
+    previous = link.get("previous") or ""
+    if link.get("state") == "absent" and os.path.islink(path):
+        os.unlink(path)
+        restored.append(path)
+    elif link.get("state") == "replaced" and previous:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.lexists(path):
+            os.unlink(path)
+        os.symlink(previous, path)
+        restored.append(path)
     reload_hypr()
-    print("Restored %s from %s" % (MONITORS_LUA, ORIGINAL_BACKUP))
+    if not restored:
+        print("restore-original: no first-install snapshot at %s" % orig, file=sys.stderr)
+        return 2
+    print("Restored pre-Screens files:")
+    for item in restored:
+        print("  %s" % item)
     return 0
 
 
@@ -1528,6 +1862,7 @@ def scale_bindings_block():
 
 
 def install_scale_bindings():
+    ensure_stock_backups()
     existing = read_text(BINDINGS_LUA)
     block = scale_bindings_block()
     if looks_managed(existing) and CTL_PATH in existing and "scale up" in existing:
@@ -1973,6 +2308,7 @@ def save_shell_json(data):
 
 
 def swap_bar_workspaces(enable):
+    ensure_stock_backups()
     config = load_shell_json()
     if not config:
         return
@@ -2040,6 +2376,7 @@ def sync_workspaces():
 
 
 def write_layout_file(ws_id, mode):
+    ensure_stock_backups()
     os.makedirs(LAYOUTS_DIR, mode=0o700, exist_ok=True)
     path = os.path.join(LAYOUTS_DIR, "%d.lua" % ws_id)
     hypr_layout = "scrolling" if mode == "scroll" else "dwindle"
@@ -2209,13 +2546,12 @@ def main(argv):
         print(json.dumps(snapshot(), separators=(",", ":")))
         return 0
     if cmd == "backup-original":
-        if os.path.isfile(ORIGINAL_BACKUP):
-            print(ORIGINAL_BACKUP)
+        ensure_stock_backups()
+        orig = originals_dir()
+        if os.path.isdir(orig):
+            print(orig)
             return 0
-        if ensure_original_backup():
-            print(ORIGINAL_BACKUP)
-            return 0
-        print("backup-original: no unmanaged monitors.lua to snapshot", file=sys.stderr)
+        print("backup-original: could not snapshot stock files", file=sys.stderr)
         return 1
     if cmd == "restore-original":
         return restore_original()

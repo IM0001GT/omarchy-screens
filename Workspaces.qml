@@ -68,7 +68,9 @@ BarWidget {
 
   function focusWorkspace(id) {
     if (!root.bar) return
-    root.bar.run("hyprctl eval " + Util.shellQuote("hl.dispatch(hl.dsp.focus({ workspace = \"" + id + "\" }))"))
+    var n = Model.workspaceId(id)
+    if (!n) return
+    root.bar.run("hyprctl eval " + Util.shellQuote("hl.dispatch(hl.dsp.focus({ workspace = \"" + n + "\" }))"))
   }
 
   function openLayoutMenu(id, anchor) {
@@ -79,11 +81,12 @@ BarWidget {
 
   function setWorkspaceLayout(mode) {
     root.menuOpen = false
-    if (!root.menuWorkspace) return
+    var n = Model.workspaceId(root.menuWorkspace)
+    if (!n) return
     layoutProc.command = [
       Quickshell.env("HOME") + "/.config/omarchy/plugins/im0001gt.screens/scripts/display-ctl",
       "workspace-layout",
-      String(root.menuWorkspace),
+      String(n),
       mode
     ]
     if (!layoutProc.running) layoutProc.running = true

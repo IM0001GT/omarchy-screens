@@ -54,6 +54,14 @@ done
   || { echo "error: plugin sources not found next to this script" >&2; exit 1; }
 
 plugin_dir="$real_home/.config/omarchy/plugins/$PLUGIN_ID"
+ctl="$SCRIPT_DIR/scripts/display-ctl"
+
+# Snapshot stock files before Screens copies or writes anything.
+# Survives plugin remove. Restore with: display-ctl restore-original
+# or ~/.local/state/im0001gt.screens/restore.sh
+if [[ -x $ctl ]] && run_as_user "$ctl" backup-original >/dev/null; then
+  echo "Kept your current Hyprland and Omarchy files in ~/.local/state/im0001gt.screens/originals/"
+fi
 
 copy_plugin_files() {
   echo "Installing plugin files to $plugin_dir ..."
@@ -101,13 +109,7 @@ else
   copy_plugin_files
 fi
 
-# Snapshot ~/.config/hypr/monitors.lua once, before Screens ever writes it.
-# Survives plugin remove. Restore with: display-ctl restore-original
-ctl="$plugin_dir/scripts/display-ctl"
-[[ -x $ctl ]] || ctl="$SCRIPT_DIR/scripts/display-ctl"
-if [[ -x $ctl ]] && run_as_user "$ctl" backup-original >/dev/null; then
-  echo "Kept your current monitors.lua at ~/.local/state/im0001gt.screens/original-monitors.lua"
-fi
+[[ -x $plugin_dir/scripts/display-ctl ]] && ctl="$plugin_dir/scripts/display-ctl"
 
 confirm() {
   local prompt="$1"
@@ -177,6 +179,8 @@ echo "  Drag tiles to arrange. Edges snap flush; stacked tiles also get a light 
 echo "  Per screen: brightness, resolution, refresh, HDR, VRR, scale, rotation."
 echo "  Desktop: text size."
 echo "  Scale keys: Super+/ up, Super+Alt+/ down."
-echo "  Uninstall: omarchy plugin remove $PLUGIN_ID"
-echo "  Restore pre-Screens monitors.lua:"
+echo "  Uninstall:"
 echo "    $plugin_dir/scripts/display-ctl restore-original"
+echo "    omarchy plugin remove $PLUGIN_ID"
+echo "  If the plugin is already gone:"
+echo "    ~/.local/state/im0001gt.screens/restore.sh"

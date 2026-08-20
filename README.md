@@ -46,7 +46,7 @@ cd omarchy-screens
 ./install.sh
 ```
 
-The first time Screens sees `~/.config/hypr/monitors.lua`, it copies that file to `~/.local/state/im0001gt.screens/original-monitors.lua` and never overwrites it. It then starts from a **fresh** Screens-owned `monitors.lua` taken from the live Hyprland layout, so leftover edits from hyprmoncfg or another layout tool cannot keep controlling the desk.
+The first time Screens runs, it copies every stock file it may change into `~/.local/state/im0001gt.screens/originals/` (and a copy of `monitors.lua` at `original-monitors.lua`). Those copies are never overwritten, live outside the plugin directory, and do not depend on a system snapshot. It then starts from a **fresh** Screens-owned `monitors.lua` taken from the live Hyprland layout, so leftover edits from hyprmoncfg or another layout tool cannot keep controlling the desk.
 
 If the [hyprmoncfg](https://github.com/crmne/omarchy-hyprmoncfg) plugin or its `hyprmoncfgd` daemon is still installed, install (and the Screens panel) warn that it will stay in control until it is removed, and offer to remove the plugin and stop the daemon. The AUR package is left in place unless you uninstall it yourself.
 
@@ -113,24 +113,36 @@ omarchy restart shell
 
 ## Uninstall
 
-```bash
-omarchy plugin remove im0001gt.screens
-```
-
-Removing the plugin does not restore `monitors.lua`. The last layout Screens wrote stays in `~/.config/hypr/monitors.lua`. The first-install copy and profiles stay in `~/.local/state/im0001gt.screens/`.
-
-To restore the layout from before Screens:
+Restore the pre-Screens files first, then remove the plugin:
 
 ```bash
 ~/.config/omarchy/plugins/im0001gt.screens/scripts/display-ctl restore-original
+omarchy plugin remove im0001gt.screens
 ```
 
-If you already removed the plugin:
+That puts back `monitors.lua`, `bindings.lua`, `shell.json`, and any workspace-layout files Screens captured, then removes the scale-key block and the brightness wrapper Screens added.
+
+Omarchy does not run an uninstall hook. If the plugin is already gone, the same restore still works from the first-install copy (it survives `plugin remove` and is independent of Timeshift or other system snapshots):
 
 ```bash
-cp ~/.local/state/im0001gt.screens/original-monitors.lua ~/.config/hypr/monitors.lua
-hyprctl reload
+~/.local/state/im0001gt.screens/restore.sh
 ```
+
+Profiles stay in `~/.local/state/im0001gt.screens/` until you delete that directory.
+
+## Security and data
+
+Plugins run as unsandboxed code inside `omarchy-shell`. Screens does not use the network at runtime, does not call `sudo` or `pkexec`, and does not ship binaries.
+
+It writes:
+
+- `~/.config/hypr/monitors.lua` — layout, scale, HDR, VRR
+- `~/.config/hypr/bindings.lua` — Super+/ and Super+Alt+/ scale keys
+- `~/.config/omarchy/shell.json` — only if you turn on workspace spreading, to swap the workspace widget
+- `~/.local/state/omarchy/workspace-layouts/` — Tile / Scroll / Float per workspace
+- `~/.local/state/im0001gt.screens/` — profiles, backups, and the restore helper
+
+The only extra privilege is optional: after you confirm, it can remove the `crmne.hyprmoncfg` plugin and `systemctl --user disable --now hyprmoncfgd.service`. It does not uninstall the hyprmoncfg package.
 
 ## Requirements
 
