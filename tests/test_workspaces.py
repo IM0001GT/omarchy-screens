@@ -325,6 +325,24 @@ class ConflictMessages(unittest.TestCase):
         self.assertIsNone(self.ctl.public_conflict(info))
 
 
+class BarCare(unittest.TestCase):
+    def setUp(self):
+        self.ctl = load_ctl()
+
+    def test_defaults_are_off(self):
+        care = self.ctl.normalize_bar_care(None)
+        self.assertFalse(care["enabled"])
+        self.assertEqual(care["dim"], 45)
+        self.assertTrue(care["hoverLift"])
+
+    def test_clamps_dim(self):
+        care = self.ctl.normalize_bar_care({"enabled": True, "dim": 200})
+        self.assertEqual(care["dim"], 100)
+        care = self.ctl.normalize_bar_care({"dim": -4, "hoverLift": False})
+        self.assertEqual(care["dim"], 0)
+        self.assertFalse(care["hoverLift"])
+
+
 class ConflictsCli(unittest.TestCase):
     def test_remove_is_refused(self):
         import subprocess

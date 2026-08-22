@@ -135,14 +135,6 @@ BarWidget {
     if (!layoutProc.running) layoutProc.running = true
   }
 
-  readonly property bool rowHasIcon: {
-    var ids = root.workspaceIds()
-    for (var i = 0; i < ids.length; i++) {
-      if (Model.workspaceLabelOf(root.assignment, ids[i]).icon) return true
-    }
-    return false
-  }
-
   readonly property real trailingGap: root.vertical ? 0 : Style.spaceReal(1.5)
 
   implicitWidth: grid.implicitWidth + trailingGap
@@ -176,39 +168,129 @@ BarWidget {
     anchors.fill: parent
     anchors.rightMargin: root.trailingGap
     columns: root.vertical ? 1 : Math.max(1, root.workspaceIds().length + (root.activeWorkspaceName !== "" ? 1 : 0))
-    columnSpacing: root.vertical ? 0 : Style.space(root.rowHasIcon ? 4 : 1)
+    columnSpacing: root.vertical ? 0 : Style.space(1)
     rowSpacing: root.vertical ? Style.space(2) : 0
 
     Repeater {
       model: root.workspaceIds()
 
-      WidgetButton {
+      // WidgetButton centers the mono advance, not ink. Nerd icons overflow
+      // that box, so offset each glyph by FontMetrics boundingRect vs advance.
+      Item {
+        id: cell
         required property int modelData
 
         readonly property var workspace: root.workspaceById(modelData)
         readonly property bool occupied: workspace !== null && workspace.toplevels.values.length > 0
         readonly property bool focused: Hyprland.focusedWorkspace !== null && Hyprland.focusedWorkspace.id === modelData
-
-        bar: root.bar
-        text: Model.workspaceBarText(root.assignment, modelData, focused)
-        opacity: occupied || focused ? 1 : 0.5
-        horizontalMargin: root.rowHasIcon ? 8 : 6
-        verticalPadding: 6
-        fixedWidth: root.vertical ? root.barSize : Style.space(root.rowHasIcon ? 24 : 20)
-        fixedHeight: root.barSize
-        tooltipText: {
+        readonly property string cellText: Model.workspaceBarText(root.assignment, modelData, focused)
+        readonly property real cellWidth: root.vertical ? root.barSize : Style.space(20)
+        readonly property string tooltipText: {
           var lab = Model.workspaceLabelOf(root.assignment, modelData)
           var bits = ["Left: go there", "Right: name, icon, layout"]
           if (lab.name) bits.unshift(lab.name)
           return bits.join(" · ")
         }
-        onPressed: function(button) {
+
+        property var bar: root.bar
+        property bool interactive: true
+        property bool pressable: true
+        property bool concealed: false
+        property var registeredBar: null
+        readonly property bool tooltipHovered: visible && interactive && !concealed && mouseArea.containsMouse
+
+        implicitWidth: cellWidth
+        implicitHeight: root.barSize
+        width: implicitWidth
+        height: implicitHeight
+        opacity: occupied || focused ? 1 : 0.5
+        Layout.fillWidth: false
+        Layout.minimumWidth: implicitWidth
+        Layout.preferredWidth: implicitWidth
+        Layout.maximumWidth: implicitWidth
+        Layout.minimumHeight: implicitHeight
+        Layout.preferredHeight: implicitHeight
+        Layout.alignment: Qt.AlignVCenter
+
+        function triggerPress(button) {
+          if (root.bar) root.bar.hideTooltip(cell)
           if (button === Qt.RightButton) {
-            root.openLayoutMenu(modelData, this)
+            root.openLayoutMenu(modelData, cell)
             return
           }
           if (root.menuOpen) root.menuOpen = false
           root.focusWorkspace(modelData)
+        }
+
+        function hideOwnTooltip() {
+          if (root.bar) root.bar.hideTooltip(cell)
+        }
+
+        function syncClickRegistration() {
+          if (registeredBar && registeredBar.unregisterClickTarget)
+            registeredBar.unregisterClickTarget(cell)
+          registeredBar = cell.bar
+          if (registeredBar && registeredBar.registerClickTarget)
+            registeredBar.registerClickTarget(cell)
+        }
+
+        onBarChanged: syncClickRegistration()
+        onVisibleChanged: if (!visible) hideOwnTooltip()
+        onInteractiveChanged: if (!interactive) hideOwnTooltip()
+        onConcealedChanged: if (concealed) hideOwnTooltip()
+        Component.onCompleted: syncClickRegistration()
+        Component.onDestruction: {
+          hideOwnTooltip()
+          if (registeredBar && registeredBar.unregisterClickTarget)
+            registeredBar.unregisterClickTarget(cell)
+        }
+
+        Behavior on opacity {
+          NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+        }
+
+        FontMetrics {
+          id: cellMetrics
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.body
+        }
+
+        readonly property real inkOffsetX: {
+          var t = cellText
+          if (!t) return 0
+          var r = cellMetrics.boundingRect(t)
+          var adv = cellMetrics.advanceWidth(t)
+          if (!r || adv <= 0 || r.width <= 0) return 0
+          return (adv / 2) - (r.x + r.width / 2)
+        }
+
+        Text {
+          id: label
+          anchors.centerIn: parent
+          anchors.horizontalCenterOffset: cell.inkOffsetX
+          text: cell.cellText
+          color: root.bar ? root.bar.barForeground : Color.foreground
+          font.family: cellMetrics.font.family
+          font.pixelSize: cellMetrics.font.pixelSize
+          renderType: Text.NativeRendering
+          horizontalAlignment: Text.AlignHCenter
+          verticalAlignment: Text.AlignVCenter
+          Behavior on color {
+            enabled: !root.bar || root.bar.foregroundAnimationEnabled
+            ColorAnimation { duration: 160 }
+          }
+        }
+
+        MouseArea {
+          id: mouseArea
+          anchors.fill: parent
+          acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+          enabled: cell.interactive
+          hoverEnabled: true
+          cursorShape: cell.pressable ? Qt.PointingHandCursor : Qt.ArrowCursor
+          onEntered: if (root.bar) root.bar.showTooltip(cell, cell.tooltipText)
+          onExited: if (root.bar) root.bar.hideTooltip(cell)
+          onClicked: function(mouse) { if (cell.pressable) cell.triggerPress(mouse.button) }
         }
       }
     }

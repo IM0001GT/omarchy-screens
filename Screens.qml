@@ -48,6 +48,10 @@ Panel {
   property var conflict: null
   property bool conflictDismissed: false
   property bool hdrTuning: false
+  property bool barCareOpen: false
+  property var barCare: Model.normalizeBarCare(null)
+  property bool oledGuard: false
+  property bool careDimDragging: false
   property int brightnessPercent: 0
   property int pendingBrightnessPercent: 0
   property bool brightnessSetQueued: false
@@ -116,6 +120,16 @@ Panel {
   readonly property bool selectedHdrOk: !!(selected && selected.hdrCapable)
   readonly property bool selectedVrrOk: !!(selected && selected.vrrCapable)
   readonly property bool selectedSecondaryGpu: !!(selected && selected.secondaryGpu)
+  readonly property var careService: {
+    try {
+      return root.bar && root.bar.shell && typeof root.bar.shell.serviceFor === "function"
+        ? root.bar.shell.serviceFor("im0001gt.screens") : null
+    } catch (e) {
+      return null
+    }
+  }
+  readonly property string carePath:
+    Quickshell.env("HOME") + "/.local/state/im0001gt.screens/bar-care.json"
   readonly property var identifyScreen: {
     var name = selected ? selected.name : ""
     var screens = Quickshell.screens
@@ -219,6 +233,7 @@ Panel {
     root.manageWorkspaces = !!(data && data.manageWorkspaces)
     root.workspacePlan = (data && data.workspacePlan) ? data.workspacePlan : []
     root.workspaceLayouts = (data && data.workspaceLayouts) ? data.workspaceLayouts : ({})
+    root.oledGuard = !!(data && data.oledGuard)
     if (data && data.hybridNotice === false) root.showHybridNotice = false
     else if (root.opened && data && data.hybridNotice) root.showHybridNotice = true
     if (data && data.conflict && data.conflict.present !== false)
@@ -553,6 +568,27 @@ Panel {
     root.layoutMenuOpen = true
   }
 
+  function pushCareToService(next) {
+    if (!root.careService) return
+    root.careService.careConfig = next
+    if (typeof root.careService.applyCareVisuals === "function")
+      root.careService.applyCareVisuals()
+  }
+
+  function saveBarCare() {
+    if (!careFile) return
+    careFile.setText(JSON.stringify(root.barCare, null, 2) + "\n")
+  }
+
+  function setBarCare(key, value, persist) {
+    var next = Model.normalizeBarCare(root.barCare)
+    next[key] = value
+    next = Model.normalizeBarCare(next)
+    root.barCare = next
+    root.pushCareToService(next)
+    if (persist !== false) root.saveBarCare()
+  }
+
   function workspaceDescription() {
     var hint = "Right-click a number to name it, pick an icon, or set Tile, Scroll, or Float."
     if (root.enabledCount <= 1)
@@ -600,6 +636,7 @@ Panel {
       root.detectNote = ""
       root.detectPending = false
       root.hdrTuning = false
+      root.barCareOpen = false
       return
     }
     root.userPicked = false
@@ -717,6 +754,21 @@ Panel {
     interval: 180
     repeat: false
     onTriggered: root.setBrightness(root.brightnessPercent)
+  }
+
+  FileView {
+    id: careFile
+    path: root.carePath
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onLoaded: {
+      if (root.careDimDragging) return
+      try { root.barCare = Model.normalizeBarCare(JSON.parse(text())) }
+      catch (e) {}
+    }
+    onFileChanged: reload()
+    Component.onCompleted: reload()
   }
 
   Process {
@@ -878,6 +930,136 @@ Panel {
                 verticalPadding: Style.space(4)
                 enabled: !!(root.selected && root.selected.enabled && root.identifyScreen)
                 onClicked: root.identify()
+              }
+            }
+          }
+
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(pixelCareLabel.implicitHeight, pixelCareBtn.implicitHeight)
+
+            PanelSectionHeader {
+              id: pixelCareLabel
+              text: "PIXEL CARE"
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Button {
+              id: pixelCareBtn
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.barCareOpen ? "Done" : (!!(root.barCare && root.barCare.enabled) ? "On" : "Off")
+              fontSize: Style.font.caption
+              fontFamily: root.bar.fontFamily
+              foreground: root.bar.foreground
+              bordered: true
+              active: root.barCareOpen || !!(root.barCare && root.barCare.enabled)
+              horizontalPadding: Style.space(10)
+              verticalPadding: Style.space(4)
+              tooltipText: "Dim the bar without painting it black. Works on any display."
+              onClicked: {
+                root.barCareOpen = !root.barCareOpen
+                if (root.barCareOpen)
+                  Qt.callLater(function() { root.revealItem(barCareSection) })
+              }
+            }
+          }
+
+          Column {
+            id: barCareSection
+            width: parent.width
+            spacing: Style.space(8)
+            visible: root.barCareOpen
+
+            Toggle {
+              width: parent.width
+              label: "Dim the bar"
+              description: "Lowers the bar widgets so a transparent or themed bar stays that colour. No black veil."
+              checked: !!(root.barCare && root.barCare.enabled)
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              onClicked: root.setBarCare("enabled", !(root.barCare && root.barCare.enabled))
+            }
+
+            Text {
+              visible: root.oledGuard
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: "OLED Guard is also installed. Its black veil will fight this — disable or remove it if the bar turns black."
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(4)
+              enabled: !!(root.barCare && root.barCare.enabled)
+              opacity: enabled ? 1 : 0.45
+
+              Item {
+                width: parent.width
+                implicitHeight: Math.max(dimLabel.implicitHeight, dimValue.implicitHeight)
+
+                PanelSectionHeader {
+                  id: dimLabel
+                  text: "DIM"
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  id: dimValue
+                  text: Model.clampBarDim(root.barCare && root.barCare.dim) + "%"
+                  color: root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+
+              PanelSlider {
+                width: parent.width
+                bar: root.bar
+                minimum: 0
+                maximum: 100
+                step: 1
+                integer: true
+                value: Model.clampBarDim(root.barCare && root.barCare.dim)
+                onMoved: function(v) {
+                  root.careDimDragging = true
+                  root.setBarCare("dim", Model.clampBarDim(v), false)
+                }
+                onReleased: function(v) {
+                  root.careDimDragging = false
+                  root.setBarCare("dim", Model.clampBarDim(v))
+                }
+              }
+
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "How far the bar settles. 100% is fully dim. Hover can lift it back."
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Toggle {
+                width: parent.width
+                label: "Lift when I point at the bar"
+                description: "Clears the dim the moment the pointer reaches the bar."
+                checked: !!(root.barCare && root.barCare.hoverLift)
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                onClicked: root.setBarCare("hoverLift", !(root.barCare && root.barCare.hoverLift))
               }
             }
           }

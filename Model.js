@@ -555,6 +555,34 @@ function profileOptions(profiles) {
   return out
 }
 
+function clampBarDim(value) {
+  var n = Number(value)
+  if (!isFinite(n)) return 45
+  if (n < 0) return 0
+  if (n > 100) return 100
+  return Math.round(n)
+}
+
+function normalizeBarCare(raw) {
+  var src = raw || {}
+  return {
+    enabled: !!src.enabled,
+    dim: clampBarDim(src.dim),
+    hoverLift: src.hoverLift !== false
+  }
+}
+
+function barOpacityFor(care, state) {
+  var cfg = normalizeBarCare(care)
+  var st = state || {}
+  if (!cfg.enabled) return 1
+  if (st.barHidden) return 1
+  if (st.hovered && cfg.hoverLift) return 1
+  var opacity = 1 - cfg.dim / 100
+  if (opacity < 0) opacity = 0
+  return opacity
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     clone: clone,
@@ -583,6 +611,9 @@ if (typeof module !== "undefined") {
     workspacePresetCount: workspacePresetCount,
     workspacePresetGlyph: workspacePresetGlyph,
     workspaceRangeLabel: workspaceRangeLabel,
-    layoutLabel: layoutLabel
+    layoutLabel: layoutLabel,
+    clampBarDim: clampBarDim,
+    normalizeBarCare: normalizeBarCare,
+    barOpacityFor: barOpacityFor
   }
 }

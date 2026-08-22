@@ -8,9 +8,9 @@ Click the two-tile mark for a panel that stays open. Displays are drawn at their
   <img width="960" alt="Screens" src="preview.png" />
 </p>
 
-| Layout | This screen | HDR | Profiles | Workspaces |
-| --- | --- | --- | --- | --- |
-| Drag tiles; edges snap, stacked tiles center lightly | Brightness, text size, resolution, Hz, scale, rotation, mirror, Detect | 8-bit or 10-bit PQ, Tune for black / peak | Name a desk; restore on connect | Optional spread of 1–10; right-click name, icon, Tile / Scroll / Float |
+| Layout | This screen | HDR | Profiles | Workspaces | Pixel Care |
+| --- | --- | --- | --- | --- | --- |
+| Drag tiles; edges snap, stacked tiles center lightly | Brightness, text size, resolution, Hz, scale, rotation, mirror, Detect | 8-bit or 10-bit PQ, Tune for black / peak | Name a desk; restore on connect | Optional spread of 1–10; right-click name, icon, Tile / Scroll / Float | Optional 0–100% bar dim, hover lift, no black veil |
 
 Works with two screens or a full battlestation. A fallback Hyprland rule still catches anything you hot-plug later. The panel scrolls when it is taller than the screen, so controls stay reachable at large scale (for example 2× on 1080p).
 
@@ -69,6 +69,11 @@ If the [hyprmoncfg](https://github.com/crmne/omarchy-hyprmoncfg) plugin or its `
 - Color space **Display** uses this panel's EDID primaries. **Wide** is BT.2020. HDR-ready LCDs that are not full wide-gamut should stay on Display
 - HDR and VRR disable themselves when that panel cannot do them
 - VRR modes: Off, Always, Fullscreen, Games & video. Always + HDR can flicker on some OLEDs; Fullscreen or Games & video is the usual workaround
+
+**Bar care**
+
+- **Pixel Care** (under Detect / Find) dims bar widgets 0–100% without a black veil, so a transparent or themed bar keeps that look
+- Hover can lift the dim. Off until you turn it on
 
 **Workspaces**
 
@@ -129,7 +134,7 @@ Plugins run as unsandboxed code inside `omarchy-shell`. Screens does not use the
 - `~/.config/hypr/bindings.lua` — Super+/ and Super+Alt+/ scale keys
 - `~/.config/omarchy/shell.json` — only if you turn on workspace spreading, to swap the workspace widget
 - `~/.local/state/omarchy/workspace-layouts/` — Tile / Scroll / Float per workspace
-- `~/.local/state/im0001gt.screens/` — profiles, backups, and the restore helper
+- `~/.local/state/im0001gt.screens/` — profiles, backups, Pixel Care settings (`bar-care.json`), and the restore helper
 
 ## Requirements
 

@@ -20,6 +20,7 @@ Commands:
   restore-original   put those first snapshots back and reload Hyprland
   claim              backup leftover config, take over monitors.lua, restore scale keys
   conflicts          show hyprmoncfg / other display managers still in control
+  bar-care <key> <value>  persist bar dim / hover lift
   scale up|down|N    step focused-display scale (SUPER+/ and SUPER+ALT+/)
 """
 
@@ -57,6 +58,7 @@ HYPRMONCFG_PLUGIN_DIR = os.path.expanduser(
 )
 HYPRMONCFG_DAEMON = "hyprmoncfgd"
 HYPRMONCFG_UNIT = HYPRMONCFG_DAEMON + ".service"
+OLED_GUARD_PLUGIN_DIR = os.path.expanduser("~/.config/omarchy/plugins/oled.guard")
 SCALE_PRESETS = (1, 1.25, 1.6, 2, 3, 4)
 
 
@@ -667,6 +669,8 @@ def snapshot():
         "workspaceLayouts": store.get("workspaceLayouts") or {},
         "conflict": public_conflict(detect_conflicts()),
         "claimedMonitors": bool(store.get("claimedMonitors")),
+        "barCare": normalize_bar_care(store.get("barCare")),
+        "oledGuard": os.path.isdir(OLED_GUARD_PLUGIN_DIR),
     }
 
 
@@ -739,9 +743,53 @@ def load_store():
                         cleaned[str(key)] = mode
                 store["workspaceLayouts"] = cleaned
             store["workspacesBarId"] = str(data.get("workspacesBarId") or "")
+            store["barCare"] = normalize_bar_care(data.get("barCare"))
     except (OSError, json.JSONDecodeError):
         pass
+    if "barCare" not in store:
+        store["barCare"] = normalize_bar_care(None)
     return store
+
+
+def _clamp_int(value, lo, hi, fallback):
+    try:
+        n = int(round(float(value)))
+    except (TypeError, ValueError):
+        return fallback
+    if n < lo:
+        return lo
+    if n > hi:
+        return hi
+    return n
+
+
+def normalize_bar_care(raw):
+    src = raw if isinstance(raw, dict) else {}
+    hover = src.get("hoverLift")
+    return {
+        "enabled": bool(src.get("enabled")),
+        "dim": _clamp_int(src.get("dim"), 0, 100, 45),
+        "hoverLift": True if hover is None else bool(hover),
+    }
+
+
+def set_bar_care(key, value):
+    store = load_store()
+    care = normalize_bar_care(store.get("barCare"))
+    name = str(key or "").strip().lower().replace("_", "-")
+    if name in ("enabled", "on"):
+        care["enabled"] = str(value).strip().lower() in ("1", "true", "on", "yes")
+    elif name == "dim":
+        care["dim"] = _clamp_int(value, 0, 100, care["dim"])
+    elif name in ("hover", "hover-lift", "hoverlift"):
+        care["hoverLift"] = str(value).strip().lower() in ("1", "true", "on", "yes")
+    else:
+        print("bar-care: enabled|dim|hover", file=sys.stderr)
+        return 2
+    store["barCare"] = care
+    save_store(store)
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
 
 
 def remember_layout(monitors):
@@ -2698,6 +2746,11 @@ def main(argv):
             return 0
         print(json.dumps(payload, separators=(",", ":")))
         return 1 if (info.get("blocking") or info.get("plugin")) else 0
+    if cmd == "bar-care":
+        return set_bar_care(
+            argv[1] if len(argv) > 1 else "",
+            argv[2] if len(argv) > 2 else "",
+        )
     if cmd == "scale":
         return scale_step(argv[1] if len(argv) > 1 else "")
     print("unknown command: %s" % cmd, file=sys.stderr)

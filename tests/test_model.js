@@ -25,6 +25,16 @@ assert.strictEqual(Model.workspaceDigit("nope"), "")
 assert.strictEqual(Model.layoutLabel("scroll"), "Scroll")
 assert.strictEqual(Model.planForMonitor(plan, left).first, 6)
 
+const careOff = Model.normalizeBarCare(null)
+assert.strictEqual(careOff.enabled, false)
+assert.strictEqual(careOff.dim, 45)
+assert.strictEqual(Model.barOpacityFor(careOff, {}), 1)
+assert.ok(Model.barOpacityFor({ enabled: true, dim: 40 }, {}) < 0.7)
+assert.ok(Model.barOpacityFor({ enabled: true, dim: 40 }, { hovered: true }) === 1)
+assert.ok(Model.barOpacityFor({ enabled: true, dim: 40, hoverLift: false }, { hovered: true }) < 1)
+assert.strictEqual(Model.barOpacityFor({ enabled: true, dim: 100 }, {}), 0)
+assert.strictEqual(Model.clampBarDim(140), 100)
+
 function mon(name, x, y, w, h) {
   return { name: name, enabled: true, x: x, y: y, logicalW: w, logicalH: h }
 }
