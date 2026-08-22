@@ -43,7 +43,7 @@ Item {
     root.component = comp
     root.barWidgetRegistry.register("im0001gt.screens.workspaces", comp, {
       displayName: "Screens workspaces",
-      description: "Per-display workspace numbers. Right-click a number for Tile, Scroll, or Float.",
+      description: "Per-display workspaces. Right-click to name, pick an icon, or set Tile / Scroll / Float.",
       category: "Compositor",
       allowMultiple: false,
       pluginId: "im0001gt.screens",

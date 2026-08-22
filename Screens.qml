@@ -515,12 +515,6 @@ Panel {
     root.conflictDismissed = true
   }
 
-  function removeConflict() {
-    if (storeProc.running) return
-    storeProc.command = [root.ctl, "conflicts", "remove"]
-    storeProc.running = true
-  }
-
   function setPrimary() {
     if (!root.selected) return
     root.userPicked = true
@@ -560,11 +554,12 @@ Panel {
   }
 
   function workspaceDescription() {
+    var hint = "Right-click a number to name it, pick an icon, or set Tile, Scroll, or Float."
     if (root.enabledCount <= 1)
-      return "Keep workspaces 1–10 on this screen. Right-click a number for Tile, Scroll, or Float."
+      return "Keep workspaces 1–10 on this screen. " + hint
     if (root.enabledCount === 2)
-      return "Primary gets 1–5, the next screen gets 6–10. Right-click a number for Tile, Scroll, or Float."
-    return "Split ten workspaces across these screens. Right-click a number for Tile, Scroll, or Float."
+      return "Primary gets 1–5, the next screen gets 6–10. " + hint
+    return "Split ten workspaces across these screens. " + hint
   }
 
   function identify() {
@@ -897,36 +892,21 @@ Panel {
               wrapMode: Text.WordWrap
               text: (root.conflict && root.conflict.message)
                 ? root.conflict.message
-                : "hyprmoncfg is still installed and will keep control of screen settings until it is removed."
+                : "hyprmoncfg is still installed and will keep control of screen settings until you remove it. Screens will not disable it for you."
               color: root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
             }
 
-            Row {
-              spacing: Style.space(6)
-
-              Button {
-                text: "Remove hyprmoncfg"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                horizontalPadding: Style.space(10)
-                verticalPadding: Style.space(4)
-                onClicked: root.removeConflict()
-              }
-
-              Button {
-                text: "Keep both"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                horizontalPadding: Style.space(10)
-                verticalPadding: Style.space(4)
-                onClicked: root.dismissConflict()
-              }
+            Button {
+              text: "Got it"
+              fontSize: Style.font.caption
+              fontFamily: root.bar.fontFamily
+              foreground: root.bar.foreground
+              bordered: true
+              horizontalPadding: Style.space(10)
+              verticalPadding: Style.space(4)
+              onClicked: root.dismissConflict()
             }
           }
 

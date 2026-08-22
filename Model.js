@@ -493,6 +493,41 @@ function workspaceDigit(id) {
   return String(n)
 }
 
+// Nerd Font codepoints for common workspace kinds. Same set as
+// jankeesvw.workspace-name, checked against JetBrainsMono Nerd Font.
+var workspacePresetIcons = [
+  0xEAC4, 0xF120, 0xF06A9, 0xF040, 0xF02D, 0xF07B, 0xE69C,
+  0xE8A4, 0xF01EE, 0xE217, 0xF232, 0xE820, 0xEB72, 0xF086, 0xF292,
+  0xEC1B, 0xF03D, 0xF030, 0xF03E, 0xF1FC, 0xF11B, 0xF108, 0xF073,
+  0xF017, 0xF002, 0xF188, 0xF080, 0xF1C0, 0xF233, 0xF0C2, 0xE712,
+  0xF015, 0xF013, 0xF023, 0xF0C3, 0xF135, 0xF0F4, 0xF005, 0xEA71
+]
+
+function workspaceLabelOf(assignment, id) {
+  var labels = (assignment && assignment.labels) ? assignment.labels : {}
+  var entry = labels[String(id)]
+  if (!entry || typeof entry !== "object") return { name: "", icon: "" }
+  return {
+    name: String(entry.name || ""),
+    icon: String(entry.icon || "")
+  }
+}
+
+function workspaceBarText(assignment, id, focused) {
+  var icon = workspaceLabelOf(assignment, id).icon
+  if (icon) return icon
+  return focused ? "\uDB85\uDCFB" : workspaceDigit(id)
+}
+
+function workspacePresetCount() {
+  return workspacePresetIcons.length
+}
+
+function workspacePresetGlyph(i) {
+  if (i < 0 || i >= workspacePresetIcons.length) return ""
+  return String.fromCodePoint(workspacePresetIcons[i])
+}
+
 function workspaceRangeLabel(first, last) {
   if (!first) return ""
   if (first === last) return workspaceDigit(first)
@@ -542,6 +577,11 @@ if (typeof module !== "undefined") {
     planForMonitor: planForMonitor,
     workspaceId: workspaceId,
     workspaceDigit: workspaceDigit,
+    workspacePresetIcons: workspacePresetIcons,
+    workspaceLabelOf: workspaceLabelOf,
+    workspaceBarText: workspaceBarText,
+    workspacePresetCount: workspacePresetCount,
+    workspacePresetGlyph: workspacePresetGlyph,
     workspaceRangeLabel: workspaceRangeLabel,
     layoutLabel: layoutLabel
   }

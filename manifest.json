@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "id": "im0001gt.screens",
   "name": "Screens",
-  "version": "1.8.1",
+  "version": "1.9.0",
   "author": "IM0001GT",
   "license": "MIT",
   "homepage": "https://github.com/IM0001GT/omarchy-screens",
-  "description": "Snap-to-edge monitor layout with brightness, text size, HDR, VRR, hardware-aware profiles, and optional 10-workspace spreading across displays",
+  "description": "Snap-to-edge monitor layout with brightness, text size, HDR, VRR, hardware-aware profiles, and optional 10-workspace spreading with names and icons",
   "kinds": [
     "bar-widget",
     "service"
@@ -17,7 +17,7 @@
   },
   "barWidget": {
     "displayName": "Screens",
-    "description": "Arrange monitors with snap, then set brightness, text size, refresh, HDR, and VRR. Optionally spread workspaces 1–10 across displays.",
+    "description": "Arrange monitors with snap, then set brightness, text size, refresh, HDR, and VRR. Optionally spread workspaces 1–10 with names and icons.",
     "category": "Hardware",
     "defaultSection": "right",
     "allowMultiple": false

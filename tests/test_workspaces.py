@@ -267,5 +267,108 @@ class ScaleSteps(unittest.TestCase):
         self.assertIn("scale down", block)
 
 
+class ConflictMessages(unittest.TestCase):
+    def setUp(self):
+        self.ctl = load_ctl()
+
+    def test_blocking_tells_user_to_remove_it(self):
+        msg = self.ctl.conflict_message({
+            "plugin": True,
+            "enabled": True,
+            "daemon": True,
+            "package": False,
+            "blocking": True,
+        })
+        self.assertIn("crmne.hyprmoncfg", msg)
+        self.assertIn("omarchy plugin remove", msg)
+        self.assertIn("yield", msg)
+        self.assertIn("will not disable it for you", msg)
+        self.assertNotIn("system" + "ctl", msg)
+
+    def test_leftover_plugin_does_not_claim_to_yield(self):
+        msg = self.ctl.conflict_message({
+            "plugin": True,
+            "enabled": False,
+            "daemon": False,
+            "package": False,
+            "blocking": False,
+        })
+        self.assertIn("crmne.hyprmoncfg", msg)
+        self.assertNotIn("yield", msg)
+        self.assertIn("will not disable it for you", msg)
+
+    def test_public_conflict_includes_leftover_plugin_dir(self):
+        info = {
+            "id": "crmne.hyprmoncfg",
+            "name": "hyprmoncfg",
+            "plugin": True,
+            "enabled": False,
+            "daemon": False,
+            "package": False,
+            "blocking": False,
+            "message": "leftover",
+        }
+        shown = self.ctl.public_conflict(info)
+        self.assertIsNotNone(shown)
+        self.assertEqual(shown["message"], "leftover")
+        self.assertFalse(shown["blocking"])
+
+    def test_public_conflict_ignores_package_only(self):
+        info = {
+            "plugin": False,
+            "enabled": False,
+            "daemon": False,
+            "package": True,
+            "blocking": False,
+            "message": "",
+        }
+        self.assertIsNone(self.ctl.public_conflict(info))
+
+
+class ConflictsCli(unittest.TestCase):
+    def test_remove_is_refused(self):
+        import subprocess
+        out = subprocess.run(
+            [CTL, "conflicts", "remove"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("does not remove other plugins", out.stderr)
+        self.assertFalse((out.stdout or "").strip())
+
+
+class MarketplaceHygiene(unittest.TestCase):
+    def test_no_installer_script(self):
+        self.assertFalse(os.path.isfile(os.path.join(ROOT, "install" + ".sh")))
+
+    def test_tree_avoids_flagged_tokens(self):
+        tokens = (
+            "su" + "do",
+            "pke" + "xec",
+            "system" + "ctl",
+            "git " + "clone",
+        )
+        skip_dirs = {".git", "__pycache__", "docs"}
+        hits = []
+        for dirpath, dirnames, filenames in os.walk(ROOT):
+            dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+            for name in filenames:
+                if name.endswith((".png", ".pyc", ".webp", ".webm", ".jpg")):
+                    continue
+                path = os.path.join(dirpath, name)
+                try:
+                    with open(path, encoding="utf-8") as fh:
+                        text = fh.read()
+                except (OSError, UnicodeDecodeError):
+                    continue
+                lower = text.lower()
+                for token in tokens:
+                    if token in lower:
+                        hits.append("%s: %s" % (os.path.relpath(path, ROOT), token))
+        self.assertEqual(hits, [])
+
+
 if __name__ == "__main__":
     unittest.main()

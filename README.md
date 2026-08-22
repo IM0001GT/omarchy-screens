@@ -10,7 +10,7 @@ Click the two-tile mark for a panel that stays open. Displays are drawn at their
 
 | Layout | This screen | HDR | Profiles | Workspaces |
 | --- | --- | --- | --- | --- |
-| Drag tiles; edges snap, stacked tiles center lightly | Brightness, text size, resolution, Hz, scale, rotation, mirror, Detect | 8-bit or 10-bit PQ, Tune for black / peak | Name a desk; restore on connect | Optional spread of 1–10; right-click Tile / Scroll / Float |
+| Drag tiles; edges snap, stacked tiles center lightly | Brightness, text size, resolution, Hz, scale, rotation, mirror, Detect | 8-bit or 10-bit PQ, Tune for black / peak | Name a desk; restore on connect | Optional spread of 1–10; right-click name, icon, Tile / Scroll / Float |
 
 Works with two screens or a full battlestation. A fallback Hyprland rule still catches anything you hot-plug later. The panel scrolls when it is taller than the screen, so controls stay reachable at large scale (for example 2× on 1080p).
 
@@ -23,7 +23,7 @@ Omarchy's Display widget does brightness, text size, and scale. It does not arra
 Other listed tools cover adjacent jobs:
 
 - **Stock Display** — backlight, font size, scale presets, enable/disable
-- **hyprmoncfg** — named profiles and a hotplug daemon. If that plugin or `hyprmoncfgd` is still installed, it stays in control of screen settings and Screens yields until you remove it
+- **hyprmoncfg** — named profiles and a hotplug daemon. If that plugin or `hyprmoncfgd` is still installed, it stays in control of screen settings. Screens warns and yields until **you** remove it; it will not disable another plugin or daemon for you
 - **Generic layout editors** — often reuse the stock monitor glyph, skip snap, and leave HDR/VRR in `monitors.lua`
 
 Screens keeps the editor in the bar, follows the theme, and writes Hyprland Lua only after you act. No AUR package. No extra daemon.
@@ -36,21 +36,11 @@ Plugins run as unsandboxed code inside `omarchy-shell`. Only add repos you trust
 omarchy plugin add https://github.com/IM0001GT/omarchy-screens --enable
 ```
 
-That clones into `~/.config/omarchy/plugins/im0001gt.screens/` and can drop the widget on the right side of the bar, next to Display.
-
-### One-shot from a clone
-
-```bash
-git clone https://github.com/IM0001GT/omarchy-screens.git
-cd omarchy-screens
-./install.sh
-```
+That places the plugin in `~/.config/omarchy/plugins/im0001gt.screens/` and can drop the widget on the right side of the bar, next to Display.
 
 The first time Screens runs, it copies every stock file it may change into `~/.local/state/im0001gt.screens/originals/` (and a copy of `monitors.lua` at `original-monitors.lua`). Those copies are never overwritten, live outside the plugin directory, and do not depend on a system snapshot. It then starts from a **fresh** Screens-owned `monitors.lua` taken from the live Hyprland layout, so leftover edits from hyprmoncfg or another layout tool cannot keep controlling the desk.
 
-If the [hyprmoncfg](https://github.com/crmne/omarchy-hyprmoncfg) plugin or its `hyprmoncfgd` daemon is still installed, install (and the Screens panel) warn that it will stay in control until it is removed, and offer to remove the plugin and stop the daemon. The AUR package is left in place unless you uninstall it yourself.
-
-`./install.sh` does that check, the backup, and the fresh file. `omarchy plugin add` clones only; the plugin claims `monitors.lua` the first time the shell loads Screens.
+If the [hyprmoncfg](https://github.com/crmne/omarchy-hyprmoncfg) plugin or its `hyprmoncfgd` daemon is still present, the Screens panel warns that it will stay in control until **you** remove it. Screens does not remove other plugins or stop other daemons. Typical cleanup is `omarchy plugin remove crmne.hyprmoncfg`, then stop `hyprmoncfgd` yourself if it is still running. The package is left in place unless you uninstall it.
 
 ## Use
 
@@ -85,7 +75,8 @@ If the [hyprmoncfg](https://github.com/crmne/omarchy-hyprmoncfg) plugin or its `
 - **Spread workspaces** pins ten workspaces across the screens that are on and not mirroring
 - Two screens: primary gets **1–5**, the next screen gets **6–10**. More screens split the ten as evenly as possible (a leftover slot goes to the first screens). Nine screens means one gets two workspaces and the rest get one
 - **Make primary** chooses which screen receives the first group
-- Each display's bar then shows only that screen's numbers. **Left-click** a number to go there. **Right-click** that same number for a menu: **Tile**, **Scroll**, or **Float**. The choice applies only to that workspace
+- Each display's bar then shows only that screen's numbers. **Left-click** a number to go there. **Right-click** that same number to **name** it, pick an **icon**, or set **Tile**, **Scroll**, or **Float**. Those choices apply only to that workspace
+- If the active workspace has a name, it appears as a chip next to the numbers
 - Turning the toggle off restores Omarchy's stock workspace widget and leaves windows where they are
 
 **Profiles**
@@ -132,17 +123,13 @@ Profiles stay in `~/.local/state/im0001gt.screens/` until you delete that direct
 
 ## Security and data
 
-Plugins run as unsandboxed code inside `omarchy-shell`. Screens does not use the network at runtime, does not call `sudo` or `pkexec`, and does not ship binaries.
-
-It writes:
+Plugins run as unsandboxed code inside `omarchy-shell`. Screens does not use the network at runtime, does not ship binaries, and does not request extra privileges. It writes only files under your home directory:
 
 - `~/.config/hypr/monitors.lua` — layout, scale, HDR, VRR
 - `~/.config/hypr/bindings.lua` — Super+/ and Super+Alt+/ scale keys
 - `~/.config/omarchy/shell.json` — only if you turn on workspace spreading, to swap the workspace widget
 - `~/.local/state/omarchy/workspace-layouts/` — Tile / Scroll / Float per workspace
 - `~/.local/state/im0001gt.screens/` — profiles, backups, and the restore helper
-
-The only extra privilege is optional: after you confirm, it can remove the `crmne.hyprmoncfg` plugin and `systemctl --user disable --now hyprmoncfgd.service`. It does not uninstall the hyprmoncfg package.
 
 ## Requirements
 
@@ -159,12 +146,11 @@ manifest.json            Omarchy plugin manifest (must live at repo root)
 Screens.qml              Bar icon + click panel
 ScreenMark.qml           Two-tile bar/hero mark
 Workspaces.qml           Per-display workspace numbers (right-click layout)
-WorkspaceLayoutMenu.qml  Tile / Scroll / Float picker
+WorkspaceLayoutMenu.qml  Name, icon, Tile / Scroll / Float picker
 Service.qml              Registers the workspace widget
 Model.js                 Snap / normalize / workspace split helpers
 scripts/display-ctl      hyprctl snapshot, monitors.lua writer, hyprmoncfg check, scale keys
 preview.png              Marketplace still
-install.sh               Enable / place the widget
 ```
 
 The repo root **is** the plugin. That is what `omarchy plugin add` and `omarchy plugin validate` expect.
