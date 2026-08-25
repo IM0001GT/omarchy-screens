@@ -271,7 +271,7 @@ class ConflictMessages(unittest.TestCase):
     def setUp(self):
         self.ctl = load_ctl()
 
-    def test_blocking_tells_user_to_remove_it(self):
+    def test_blocking_tells_user_to_unmanage(self):
         msg = self.ctl.conflict_message({
             "plugin": True,
             "enabled": True,
@@ -279,25 +279,13 @@ class ConflictMessages(unittest.TestCase):
             "package": False,
             "blocking": True,
         })
-        self.assertIn("crmne.hyprmoncfg", msg)
-        self.assertIn("omarchy plugin remove", msg)
-        self.assertIn("yield", msg)
-        self.assertIn("will not disable it for you", msg)
+        self.assertIn("hyprmoncfg unmanage", msg)
+        self.assertIn("take over", msg)
+        self.assertIn("does not need to be stopped", msg)
+        self.assertNotIn("remove crmne.hyprmoncfg", msg)
         self.assertNotIn("system" + "ctl", msg)
 
-    def test_leftover_plugin_does_not_claim_to_yield(self):
-        msg = self.ctl.conflict_message({
-            "plugin": True,
-            "enabled": False,
-            "daemon": False,
-            "package": False,
-            "blocking": False,
-        })
-        self.assertIn("crmne.hyprmoncfg", msg)
-        self.assertNotIn("yield", msg)
-        self.assertIn("will not disable it for you", msg)
-
-    def test_public_conflict_includes_leftover_plugin_dir(self):
+    def test_public_conflict_ignores_leftover_plugin_dir(self):
         info = {
             "id": "crmne.hyprmoncfg",
             "name": "hyprmoncfg",
@@ -308,10 +296,7 @@ class ConflictMessages(unittest.TestCase):
             "blocking": False,
             "message": "leftover",
         }
-        shown = self.ctl.public_conflict(info)
-        self.assertIsNotNone(shown)
-        self.assertEqual(shown["message"], "leftover")
-        self.assertFalse(shown["blocking"])
+        self.assertIsNone(self.ctl.public_conflict(info))
 
     def test_public_conflict_ignores_package_only(self):
         info = {
@@ -323,6 +308,22 @@ class ConflictMessages(unittest.TestCase):
             "message": "",
         }
         self.assertIsNone(self.ctl.public_conflict(info))
+
+    def test_running_unmanaged_daemon_is_detected_from_status(self):
+        result = type("Result", (), {
+            "returncode": 0,
+            "stdout": '{"daemon":{"running":true,"unmanaged":true}}',
+        })()
+        self.ctl.run = lambda *args, **kwargs: result
+        self.assertFalse(self.ctl.hyprmoncfg_management_state())
+
+    def test_running_managed_daemon_is_detected_from_status(self):
+        result = type("Result", (), {
+            "returncode": 0,
+            "stdout": '{"daemon":{"running":true}}',
+        })()
+        self.ctl.run = lambda *args, **kwargs: result
+        self.assertTrue(self.ctl.hyprmoncfg_management_state())
 
 
 class BarCare(unittest.TestCase):

@@ -1074,7 +1074,7 @@ Panel {
               wrapMode: Text.WordWrap
               text: (root.conflict && root.conflict.message)
                 ? root.conflict.message
-                : "hyprmoncfg is still installed and will keep control of screen settings until you remove it. Screens will not disable it for you."
+                : "hyprmoncfg is currently managing the monitor configuration. Turn off 'Managed by hyprmoncfg' in its panel, or run hyprmoncfg unmanage. Screens can then take over; the daemon does not need to be stopped."
               color: root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption

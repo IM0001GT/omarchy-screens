@@ -23,7 +23,7 @@ Omarchy's Display widget does brightness, text size, and scale. It does not arra
 Other listed tools cover adjacent jobs:
 
 - **Stock Display** — backlight, font size, scale presets, enable/disable
-- **hyprmoncfg** — named profiles and a hotplug daemon. If that plugin or `hyprmoncfgd` is still installed, it stays in control of screen settings. Screens warns and yields until **you** remove it; it will not disable another plugin or daemon for you
+- **hyprmoncfg** — named profiles and a hotplug daemon. Turn off **Managed by hyprmoncfg** in its panel, or run `hyprmoncfg unmanage`, before switching to Screens
 - **Generic layout editors** — often reuse the stock monitor glyph, skip snap, and leave HDR/VRR in `monitors.lua`
 
 Screens keeps the editor in the bar, follows the theme, and writes Hyprland Lua only after you act. No AUR package. No extra daemon.
@@ -38,9 +38,9 @@ omarchy plugin add https://github.com/IM0001GT/omarchy-screens --enable
 
 That places the plugin in `~/.config/omarchy/plugins/im0001gt.screens/` and can drop the widget on the right side of the bar, next to Display.
 
-The first time Screens runs, it copies every stock file it may change into `~/.local/state/im0001gt.screens/originals/` (and a copy of `monitors.lua` at `original-monitors.lua`). Those copies are never overwritten, live outside the plugin directory, and do not depend on a system snapshot. It then starts from a **fresh** Screens-owned `monitors.lua` taken from the live Hyprland layout, so leftover edits from hyprmoncfg or another layout tool cannot keep controlling the desk.
+The first time Screens runs, it copies every stock file it may change into `~/.local/state/im0001gt.screens/originals/` (and a copy of `monitors.lua` at `original-monitors.lua`). Those copies are never overwritten, live outside the plugin directory, and do not depend on a system snapshot. It then starts from a **fresh** Screens-owned `monitors.lua` taken from the live Hyprland layout, so leftover edits from another layout tool cannot keep controlling the desk.
 
-If the [hyprmoncfg](https://github.com/crmne/omarchy-hyprmoncfg) plugin or its `hyprmoncfgd` daemon is still present, the Screens panel warns that it will stay in control until **you** remove it. Screens does not remove other plugins or stop other daemons. Typical cleanup is `omarchy plugin remove crmne.hyprmoncfg`, then stop `hyprmoncfgd` yourself if it is still running. The package is left in place unless you uninstall it.
+If [hyprmoncfg](https://github.com/crmne/omarchy-hyprmoncfg) is actively managing the monitor configuration, Screens waits for you to turn off **Managed by hyprmoncfg** in its panel or run `hyprmoncfg unmanage`. Both do the same thing: stop automatic profile switching, remove the line that loads `hyprmoncfg-monitors.lua` from the root Hyprland configuration, and reload Hyprland. Screens can then take over. The generated file may remain on disk and the unmanaged daemon may remain running, but neither affects Hyprland because the file is no longer loaded and the daemon no longer applies profiles automatically.
 
 ## Use
 
@@ -90,7 +90,7 @@ If the [hyprmoncfg](https://github.com/crmne/omarchy-hyprmoncfg) plugin or its `
 - **On connect** reapplies a matching profile when a display is plugged in
 - Turning a display on, or turning **Mirror** off, restores the matching saved layout instead of leaving tiles stacked
 
-Changes write `~/.config/hypr/monitors.lua` after you drag, turn a display on, or save. Later applies keep a short rolling set of timestamped copies in `~/.local/state/im0001gt.screens/`. Leftover rules from stock Omarchy, hyprmoncfg, or another editor are replaced after the original file is copied aside.
+Changes write `~/.config/hypr/monitors.lua` after you drag, turn a display on, or save. Later applies keep a short rolling set of timestamped copies in `~/.local/state/im0001gt.screens/`. Leftover rules from stock Omarchy or another editor are replaced after the original file is copied aside.
 
 Move it with `omarchy bar move im0001gt.screens`.
 
@@ -154,7 +154,7 @@ Workspaces.qml           Per-display workspace numbers (right-click layout)
 WorkspaceLayoutMenu.qml  Name, icon, Tile / Scroll / Float picker
 Service.qml              Registers the workspace widget
 Model.js                 Snap / normalize / workspace split helpers
-scripts/display-ctl      hyprctl snapshot, monitors.lua writer, hyprmoncfg check, scale keys
+scripts/display-ctl      hyprctl snapshot, monitors.lua writer, hyprmoncfg management check, scale keys
 preview.png              Marketplace still
 ```
 

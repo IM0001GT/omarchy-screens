@@ -1817,32 +1817,30 @@ def plugin_enabled(plugin_id):
     return False
 
 
+def hyprmoncfg_management_state():
+    """Return True when managed, False when unmanaged, or None if unknown."""
+    out = run(["hyprmoncfg", "status", "--json"], timeout=8)
+    if not out or out.returncode != 0 or not (out.stdout or "").strip():
+        return None
+    try:
+        payload = json.loads(out.stdout)
+    except json.JSONDecodeError:
+        return None
+    daemon = payload.get("daemon") if isinstance(payload, dict) else None
+    if not isinstance(daemon, dict) or daemon.get("running") is not True:
+        return None
+    return daemon.get("unmanaged") is not True
+
+
 _conflict_cache = {"at": 0.0, "info": None}
 
 
 def conflict_message(info):
-    bits = []
-    if info.get("plugin") or info.get("enabled"):
-        bits.append("the crmne.hyprmoncfg plugin")
-    if info.get("daemon"):
-        bits.append("the hyprmoncfgd daemon")
-    if info.get("package") and not bits:
-        bits.append("the hyprmoncfg package")
-    who = " and ".join(bits) if bits else "hyprmoncfg"
-    if info.get("blocking"):
-        extra = (
-            "It stays in control of screen settings until you remove it. "
-            "Screens will yield until then, and will not disable it for you. "
-        )
-    else:
-        extra = (
-            "Remove it if you are not using it. Screens will not disable it for you. "
-        )
     return (
-        "Found %s. %s"
-        "Use: omarchy plugin remove crmne.hyprmoncfg — "
-        "and stop hyprmoncfgd yourself if it is still running."
-        % (who, extra)
+        "hyprmoncfg is currently managing the monitor configuration. "
+        "Turn off 'Managed by hyprmoncfg' in its panel, or run: "
+        "hyprmoncfg unmanage. Screens can then take over; the daemon does not "
+        "need to be stopped."
     )
 
 
@@ -1856,8 +1854,10 @@ def detect_conflicts():
     daemon_running = process_named(HYPRMONCFG_DAEMON)
     daemon_wanted = user_unit_wanted(HYPRMONCFG_UNIT)
     package = bool(shutil.which(HYPRMONCFG_DAEMON) or shutil.which("hyprmoncfg"))
-    blocking = bool(enabled or daemon_running or daemon_wanted)
-    present = bool(plugin or blocking or package)
+    management = hyprmoncfg_management_state() if daemon_running else None
+    unmanaged = management is False
+    blocking = bool((daemon_running or daemon_wanted) and not unmanaged)
+    present = bool(plugin or daemon_running or daemon_wanted or package)
     info = {
         "id": HYPRMONCFG_PLUGIN_ID,
         "name": "hyprmoncfg",
@@ -1865,6 +1865,7 @@ def detect_conflicts():
         "enabled": enabled,
         "daemon": daemon_running or daemon_wanted,
         "daemonActive": daemon_running,
+        "unmanaged": unmanaged,
         "package": package,
         "blocking": blocking,
         "present": present,
@@ -1874,7 +1875,7 @@ def detect_conflicts():
             "daemon": daemon_running or daemon_wanted,
             "package": package,
             "blocking": blocking,
-        }) if (blocking or plugin) else "",
+        }) if blocking else "",
     }
     _conflict_cache["at"] = now
     _conflict_cache["info"] = info
@@ -1882,7 +1883,7 @@ def detect_conflicts():
 
 
 def public_conflict(info):
-    if not info or not (info.get("blocking") or info.get("plugin")):
+    if not info or not info.get("blocking"):
         return None
     return {
         "id": info.get("id") or "",
@@ -1890,6 +1891,7 @@ def public_conflict(info):
         "plugin": bool(info.get("plugin")),
         "enabled": bool(info.get("enabled")),
         "daemon": bool(info.get("daemon")),
+        "unmanaged": bool(info.get("unmanaged")),
         "package": bool(info.get("package")),
         "blocking": bool(info.get("blocking")),
         "message": info.get("message") or "",
@@ -2740,12 +2742,12 @@ def main(argv):
         info = detect_conflicts()
         payload = public_conflict(info) or {"present": False, "blocking": False}
         if action in ("--check", "check"):
-            if info.get("blocking") or info.get("plugin"):
+            if info.get("blocking"):
                 print(json.dumps(payload, separators=(",", ":")))
                 return 1
             return 0
         print(json.dumps(payload, separators=(",", ":")))
-        return 1 if (info.get("blocking") or info.get("plugin")) else 0
+        return 1 if info.get("blocking") else 0
     if cmd == "bar-care":
         return set_bar_care(
             argv[1] if len(argv) > 1 else "",
