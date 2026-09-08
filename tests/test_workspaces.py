@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import json
 import os
 import unittest
 from importlib.machinery import SourceFileLoader
@@ -200,6 +201,8 @@ class StockBackups(unittest.TestCase):
         self.ctl.SHELL_JSON = os.path.join(self.tmp, "omarchy", "shell.json")
         self.ctl.LAYOUTS_DIR = os.path.join(self.tmp, "layouts")
         self.ctl.BRIGHTNESS_LINK = os.path.join(self.tmp, "bin", "omarchy-brightness-display")
+        self.ctl.PLUGIN_DIR = os.path.join(self.tmp, "plugins", "im0001gt.screens")
+        os.makedirs(self.ctl.PLUGIN_DIR, exist_ok=True)
         os.makedirs(os.path.join(self.tmp, "hypr"), exist_ok=True)
         os.makedirs(os.path.join(self.tmp, "omarchy"), exist_ok=True)
         os.makedirs(os.path.join(self.tmp, "layouts"), exist_ok=True)
@@ -238,6 +241,11 @@ class StockBackups(unittest.TestCase):
         self.assertNotIn("BEGIN im0001gt.screens", bindings)
         with open(self.ctl.SHELL_JSON, encoding="utf-8") as fh:
             self.assertIn("omarchy.workspaces", fh.read())
+        live_companion = os.path.join(
+            os.path.expanduser("~"),
+            ".config/omarchy/plugins/im0001gt.screens.workspaces",
+        )
+        self.assertNotEqual(self.ctl.workspaces_plugin_dir(), live_companion)
 
     def test_bindings_backup_strips_managed_block(self):
         with open(self.ctl.BINDINGS_LUA, "w", encoding="utf-8") as fh:
@@ -640,6 +648,117 @@ class MarketplaceHygiene(unittest.TestCase):
                     if token in lower:
                         hits.append("%s: %s" % (os.path.relpath(path, ROOT), token))
         self.assertEqual(hits, [])
+
+
+class Omarchy403WidgetRegistry(unittest.TestCase):
+    def test_service_does_not_call_registry_register(self):
+        path = os.path.join(ROOT, "Service.qml")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertNotIn("barWidgetRegistry.register", text)
+        self.assertNotIn("function registerWidget", text)
+        self.assertNotIn("function finishRegister", text)
+
+
+class WorkspacesCompanionPlugin(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.ctl = load_ctl()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.plugins = os.path.join(self.tmp.name, "plugins")
+        self.src = os.path.join(self.plugins, "im0001gt.screens")
+        os.makedirs(self.src, exist_ok=True)
+        for name in ("Workspaces.qml", "WorkspaceLayoutMenu.qml", "Model.js", "LICENSE"):
+            with open(os.path.join(ROOT, name), encoding="utf-8") as fh:
+                text = fh.read()
+            with open(os.path.join(self.src, name), "w", encoding="utf-8") as fh:
+                fh.write(text)
+        with open(os.path.join(self.src, "manifest.json"), "w", encoding="utf-8") as fh:
+            json.dump({
+                "schemaVersion": 1,
+                "id": "im0001gt.screens",
+                "name": "Screens",
+                "version": "1.12.0",
+                "kinds": ["bar-widget", "service"],
+                "entryPoints": {"barWidget": "Screens.qml", "service": "Service.qml"},
+            }, fh)
+        self.ctl.PLUGIN_DIR = self.src
+        self.ctl.OUR_WS_WIDGET = "im0001gt.screens.workspaces"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def companion_dir(self):
+        return os.path.join(self.plugins, "im0001gt.screens.workspaces")
+
+    def test_install_writes_valid_companion_manifest(self):
+        changed = self.ctl.install_workspaces_plugin()
+        self.assertTrue(changed)
+        dest = self.companion_dir()
+        manifest_path = os.path.join(dest, "manifest.json")
+        self.assertTrue(os.path.isfile(manifest_path))
+        with open(manifest_path, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        self.assertEqual(manifest["id"], "im0001gt.screens.workspaces")
+        self.assertEqual(manifest["version"], "1.12.0")
+        self.assertEqual(manifest["kinds"], ["bar-widget"])
+        self.assertEqual(manifest["entryPoints"]["barWidget"], "Workspaces.qml")
+        self.assertEqual(manifest["barWidget"]["displayName"], "Screens workspaces")
+        self.assertEqual(manifest["barWidget"]["category"], "Compositor")
+        self.assertFalse(manifest["barWidget"]["allowMultiple"])
+        self.assertEqual(manifest["barWidget"]["defaultSection"], "left")
+        for name in ("Workspaces.qml", "WorkspaceLayoutMenu.qml", "Model.js", "LICENSE"):
+            self.assertTrue(os.path.isfile(os.path.join(dest, name)), name)
+        self.assertTrue(self.ctl.is_generated_workspaces_plugin(dest))
+
+    def test_install_is_idempotent(self):
+        self.assertTrue(self.ctl.install_workspaces_plugin())
+        self.assertFalse(self.ctl.install_workspaces_plugin())
+
+    def test_install_refreshes_when_source_changes(self):
+        self.ctl.install_workspaces_plugin()
+        with open(os.path.join(self.src, "Workspaces.qml"), "a", encoding="utf-8") as fh:
+            fh.write("\n// touched\n")
+        self.assertTrue(self.ctl.install_workspaces_plugin())
+
+    def test_remove_only_deletes_generated_companion(self):
+        self.ctl.install_workspaces_plugin()
+        dest = self.companion_dir()
+        self.assertTrue(os.path.isdir(dest))
+        self.assertTrue(self.ctl.remove_workspaces_plugin())
+        self.assertFalse(os.path.isdir(dest))
+        os.makedirs(dest, exist_ok=True)
+        with open(os.path.join(dest, "manifest.json"), "w", encoding="utf-8") as fh:
+            json.dump({"id": "im0001gt.screens.workspaces"}, fh)
+        self.assertFalse(self.ctl.remove_workspaces_plugin())
+        self.assertTrue(os.path.isdir(dest))
+
+    def test_restore_original_removes_generated_companion(self):
+        self.ctl.install_workspaces_plugin()
+        orig = os.path.join(self.tmp.name, "originals")
+        os.makedirs(orig, exist_ok=True)
+        with open(os.path.join(orig, "monitors.lua"), "w", encoding="utf-8") as fh:
+            fh.write("hl.monitor({ output = \"eDP-1\" })\n")
+        self.ctl.BACKUP_DIR = os.path.join(self.tmp.name, "state")
+        self.ctl.ORIGINAL_BACKUP = os.path.join(orig, "monitors.lua")
+        os.makedirs(self.ctl.BACKUP_DIR, exist_ok=True)
+        self.ctl.MONITORS_LUA = os.path.join(self.tmp.name, "hypr", "monitors.lua")
+        self.ctl.BINDINGS_LUA = os.path.join(self.tmp.name, "hypr", "bindings.lua")
+        self.ctl.SHELL_JSON = os.path.join(self.tmp.name, "omarchy", "shell.json")
+        self.ctl.LAYOUTS_DIR = os.path.join(self.tmp.name, "layouts")
+        self.ctl.BRIGHTNESS_LINK = os.path.join(self.tmp.name, "bin", "omarchy-brightness-display")
+        os.makedirs(os.path.join(self.tmp.name, "hypr"), exist_ok=True)
+        os.makedirs(os.path.join(self.tmp.name, "omarchy"), exist_ok=True)
+        def originals_dir():
+            return orig
+        self.ctl.originals_dir = originals_dir
+        def load_manifest():
+            return {"files": {"monitors.lua": {"present": True, "name": "monitors.lua"}}}
+        self.ctl.load_originals_manifest = load_manifest
+        self.ctl.reload_hypr = lambda: None
+        rc = self.ctl.restore_original()
+        self.assertEqual(rc, 0)
+        self.assertFalse(os.path.isdir(self.companion_dir()))
 
 
 if __name__ == "__main__":

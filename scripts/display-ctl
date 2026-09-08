@@ -20,7 +20,7 @@ Commands:
   idle off|on|notice
   backup-original    snapshot stock files once, before Screens writes them
   restore-original   put those first snapshots back and reload Hyprland
-  claim              backup leftover config, take over monitors.lua, restore scale keys
+  claim              backup leftover config, take over monitors.lua, restore scale keys, install workspaces plugin
   conflicts          show hyprmoncfg / HyprMod / other display managers still in control
   bar-care <key> <value>  persist bar dim / hover lift
   scale up|down|N    step focused-display scale
@@ -57,6 +57,13 @@ STAMPED_BACKUP_GLOB = "monitors.lua.[0-9]*"
 WORKSPACE_COUNT = 10
 OUR_WS_WIDGET = "im0001gt.screens.workspaces"
 STOCK_WS_WIDGET = "omarchy.workspaces"
+WORKSPACES_PLUGIN_FILES = (
+    "Workspaces.qml",
+    "WorkspaceLayoutMenu.qml",
+    "Model.js",
+    "LICENSE",
+)
+WORKSPACES_PLUGIN_MARKER = "generated-by-im0001gt.screens.json"
 HYPRMONCFG_PLUGIN_ID = "crmne.hyprmoncfg"
 HYPRMONCFG_PLUGIN_DIR = os.path.expanduser(
     "~/.config/omarchy/plugins/%s" % HYPRMONCFG_PLUGIN_ID
@@ -1712,6 +1719,16 @@ if path:
         if os.path.lexists(path):
             os.unlink(path)
         os.symlink(previous, path)
+companion = os.path.join(home, ".config/omarchy/plugins/im0001gt.screens.workspaces")
+marker = os.path.join(companion, "generated-by-im0001gt.screens.json")
+if os.path.isfile(marker):
+    try:
+        with open(marker, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and data.get("generatedBy") == "im0001gt.screens":
+            shutil.rmtree(companion)
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        pass
 print("Restored first-install Hyprland and Omarchy files from", orig)
 PY
 hyprctl reload >/dev/null 2>&1 || true
@@ -1825,6 +1842,8 @@ def restore_original():
         os.symlink(previous, path)
         restored.append(path)
     reload_hypr()
+    if remove_workspaces_plugin():
+        restored.append(workspaces_plugin_dir())
     if not restored:
         print("restore-original: no first-install snapshot at %s" % orig, file=sys.stderr)
         return 2
@@ -2608,6 +2627,7 @@ def scale_step(requested):
 def claim_monitors(force=False):
     existing = read_text(MONITORS_LUA) if os.path.isfile(MONITORS_LUA) else ""
     ensure_original_backup(existing)
+    install_workspaces_plugin()
     bindings_changed = maybe_install_scale_bindings()
     store = load_store()
     conflicts = detect_conflicts()
@@ -3034,6 +3054,140 @@ def save_shell_json(data):
     os.replace(tmp, SHELL_JSON)
 
 
+def workspaces_plugin_dir():
+    parent = os.path.dirname(PLUGIN_DIR.rstrip(os.sep))
+    return os.path.join(parent, OUR_WS_WIDGET)
+
+
+def screens_plugin_version():
+    path = os.path.join(PLUGIN_DIR, "manifest.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        version = str((data or {}).get("version") or "").strip()
+        if version:
+            return version
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        pass
+    return "1.0.0"
+
+
+def workspaces_plugin_manifest():
+    return {
+        "schemaVersion": 1,
+        "id": OUR_WS_WIDGET,
+        "name": "Screens workspaces",
+        "version": screens_plugin_version(),
+        "author": "IM0001GT",
+        "license": "MIT",
+        "homepage": "https://github.com/IM0001GT/omarchy-screens",
+        "description": (
+            "Per-display workspaces. Right-click to name, pick an icon, "
+            "or set Tile / Scroll / Float."
+        ),
+        "kinds": ["bar-widget"],
+        "entryPoints": {"barWidget": "Workspaces.qml"},
+        "barWidget": {
+            "displayName": "Screens workspaces",
+            "description": (
+                "Per-display workspaces. Right-click to name, pick an icon, "
+                "or set Tile / Scroll / Float."
+            ),
+            "category": "Compositor",
+            "allowMultiple": False,
+            "defaultSection": "left",
+        },
+    }
+
+
+def is_generated_workspaces_plugin(path=None):
+    dest = path or workspaces_plugin_dir()
+    marker = os.path.join(dest, WORKSPACES_PLUGIN_MARKER)
+    if not os.path.isfile(marker):
+        return False
+    try:
+        with open(marker, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return isinstance(data, dict) and data.get("generatedBy") == "im0001gt.screens"
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        return False
+
+
+def read_bytes(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def workspaces_plugin_files():
+    files = {}
+    for name in WORKSPACES_PLUGIN_FILES:
+        data = read_bytes(os.path.join(PLUGIN_DIR, name))
+        if data is not None:
+            files[name] = data
+    files["manifest.json"] = (
+        json.dumps(workspaces_plugin_manifest(), indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    files[WORKSPACES_PLUGIN_MARKER] = (
+        json.dumps({"generatedBy": "im0001gt.screens"}, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    return files
+
+
+def workspaces_plugin_matches(dest, files):
+    if not os.path.isdir(dest):
+        return False
+    try:
+        existing = set(os.listdir(dest))
+    except OSError:
+        return False
+    if existing != set(files):
+        return False
+    for name, data in files.items():
+        if read_bytes(os.path.join(dest, name)) != data:
+            return False
+    return True
+
+
+def install_workspaces_plugin():
+    dest = workspaces_plugin_dir()
+    files = workspaces_plugin_files()
+    if workspaces_plugin_matches(dest, files):
+        return False
+    parent = os.path.dirname(dest)
+    staging = os.path.join(parent, ".%s.staging" % OUR_WS_WIDGET)
+    if os.path.isdir(staging):
+        shutil.rmtree(staging)
+    os.makedirs(staging)
+    for name, data in files.items():
+        with open(os.path.join(staging, name), "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
+    backup = dest + ".old"
+    if os.path.isdir(backup):
+        shutil.rmtree(backup)
+    if os.path.isdir(dest):
+        os.rename(dest, backup)
+    os.rename(staging, dest)
+    if os.path.isdir(backup):
+        shutil.rmtree(backup)
+    return True
+
+
+def remove_workspaces_plugin():
+    dest = workspaces_plugin_dir()
+    if not is_generated_workspaces_plugin(dest):
+        return False
+    shutil.rmtree(dest)
+    return True
+
+
 def swap_bar_workspaces(enable):
     ensure_stock_backups()
     config = load_shell_json()
@@ -3081,6 +3235,7 @@ def set_manage_workspaces(on):
     reload_hypr()
     if on:
         pin_and_save_plan(live)
+        install_workspaces_plugin()
         swap_bar_workspaces(True)
     else:
         write_workspaces_json(False, [], store.get("workspaceLayouts") or {})

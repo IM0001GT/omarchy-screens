@@ -81,7 +81,7 @@ If [HyprMod](https://github.com/BlueManCZ/hyprmod) is managing displays, its `hy
 
 **Workspaces**
 
-- **Spread workspaces** pins ten workspaces across the screens that are on and not mirroring
+- **Spread workspaces** pins ten workspaces across the screens that are on and not mirroring. Omarchy 4.0.3 no longer lets a plugin register a second bar widget at runtime, so Screens installs a companion plugin (`im0001gt.screens.workspaces`) next to this one. You still only add Screens; spreading swaps that companion onto the bar in place of stock Workspaces.
 - Two screens: primary gets **1–5**, the next screen gets **6–10**. More screens split the ten as evenly as possible (a leftover slot goes to the first screens). Nine screens means one gets two workspaces and the rest get one
 - **Make primary** chooses which screen receives the first group
 - Each display's bar then shows only that screen's numbers. **Left-click** a number to go there. **Right-click** that same number to **name** it, pick an **icon**, or set **Tile**, **Scroll**, or **Float**. Those choices apply only to that workspace
@@ -111,6 +111,8 @@ omarchy plugin update im0001gt.screens --yes
 omarchy restart shell
 ```
 
+**1.12.0** is the Omarchy 4.0.3 fix. The shell no longer lets a third-party service call `barWidgetRegistry.register()`, so spreading workspaces now ships as a generated companion plugin instead of a runtime registration. Pixel Care still dims only what the scoped bar API exposes; it cannot reach other plugins' widgets.
+
 ## Uninstall
 
 Restore the pre-Screens files first, then remove the plugin:
@@ -120,7 +122,7 @@ Restore the pre-Screens files first, then remove the plugin:
 omarchy plugin remove im0001gt.screens
 ```
 
-That puts back `monitors.lua`, `bindings.lua`, `shell.json`, and any workspace-layout files Screens captured, then removes the scale-key block and the brightness wrapper Screens added.
+That puts back `monitors.lua`, `bindings.lua`, `shell.json`, and any workspace-layout files Screens captured, then removes the scale-key block, the brightness wrapper Screens added, and the generated `im0001gt.screens.workspaces` companion plugin.
 
 Omarchy does not run an uninstall hook. If the plugin is already gone, the same restore still works from the first-install copy (it survives `plugin remove` and is independent of Timeshift or other system snapshots):
 
@@ -156,7 +158,7 @@ Screens.qml              Bar icon + click panel
 ScreenMark.qml           Two-tile bar/hero mark
 Workspaces.qml           Per-display workspace numbers (right-click layout)
 WorkspaceLayoutMenu.qml  Name, icon, Tile / Scroll / Float picker
-Service.qml              Registers the workspace widget
+Service.qml              Headless helper: Pixel Care, Apply/Revert, companion workspaces plugin
 Model.js                 Snap / normalize / workspace split helpers
 scripts/display-ctl      hyprctl snapshot, monitors.lua writer, hyprmoncfg / HyprMod check, scale keys
 preview.png              Marketplace still
