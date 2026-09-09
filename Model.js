@@ -695,6 +695,28 @@ function applyBarCare(bar, care, state) {
   return true
 }
 
+function windowTreeHovered(item, depth) {
+  if (!item || depth > 24) return false
+  if (item.hovered === true) return true
+  var list = item.data
+  if (!list || !list.length) return false
+  var i
+  for (i = 0; i < list.length; i++) {
+    if (windowTreeHovered(list[i], (depth || 0) + 1)) return true
+  }
+  return false
+}
+
+function applyBarCareToWindow(win, care, state) {
+  if (!win || !win.contentItem)
+    return false
+  var hovered = !!(state && state.hovered) || windowTreeHovered(win.contentItem, 0)
+  var hidden = !!(state && state.barHidden)
+  var opacity = barOpacityFor(care, { hovered: hovered, barHidden: hidden })
+  try { win.contentItem.opacity = opacity } catch (e) { return false }
+  return true
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     clone: clone,
@@ -735,6 +757,8 @@ if (typeof module !== "undefined") {
     normalizeBarCare: normalizeBarCare,
     barOpacityFor: barOpacityFor,
     findHostBar: findHostBar,
-    applyBarCare: applyBarCare
+    applyBarCare: applyBarCare,
+    windowTreeHovered: windowTreeHovered,
+    applyBarCareToWindow: applyBarCareToWindow
   }
 }

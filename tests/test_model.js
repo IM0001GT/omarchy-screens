@@ -46,6 +46,15 @@ assert.ok(Model.applyBarCare({ moduleSlots: slots, barHovered: true }, { enabled
 assert.strictEqual(slots[0].opacity, 1)
 assert.ok(!Model.applyBarCare({ barHovered: false }, { enabled: true, dim: 40 }))
 assert.ok(!Model.applyBarCare(null, { enabled: true, dim: 40 }))
+
+const content = { opacity: 1, data: [] }
+assert.ok(Model.applyBarCareToWindow({ contentItem: content }, { enabled: true, dim: 85, hoverLift: true }))
+assert.ok(content.opacity < 0.2)
+content.data = [{ hovered: true }]
+assert.ok(Model.applyBarCareToWindow({ contentItem: content }, { enabled: true, dim: 85, hoverLift: true }))
+assert.strictEqual(content.opacity, 1)
+assert.ok(!Model.applyBarCareToWindow(null, { enabled: true, dim: 85 }))
+assert.ok(!Model.applyBarCareToWindow({}, { enabled: true, dim: 85 }))
 assert.strictEqual(Model.formatScale(1.33), "1.33")
 assert.strictEqual(Model.formatScale(1.5), "1.5")
 assert.ok(Model.scaleIsSharp({ width: 3840, height: 2160 }, 1.25))

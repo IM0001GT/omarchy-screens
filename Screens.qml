@@ -715,6 +715,11 @@ Panel {
   }
 
   function applyCareVisuals() {
+    var win = (typeof button !== "undefined" && button && button.QsWindow && button.QsWindow.window)
+      || (root.QsWindow && root.QsWindow.window)
+      || null
+    if (Model.applyBarCareToWindow(win, root.barCare, {}))
+      return
     Model.applyBarCare(root.hostBar(), root.barCare, {})
   }
 
