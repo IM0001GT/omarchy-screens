@@ -34,6 +34,12 @@ assert.ok(Model.barOpacityFor({ enabled: true, dim: 40 }, { hovered: true }) ===
 assert.ok(Model.barOpacityFor({ enabled: true, dim: 40, hoverLift: false }, { hovered: true }) < 1)
 assert.strictEqual(Model.barOpacityFor({ enabled: true, dim: 100 }, {}), 0)
 assert.strictEqual(Model.clampBarDim(140), 100)
+assert.strictEqual(Model.clampNightlight(4000), 4000)
+assert.strictEqual(Model.clampNightlight(80), 1500)
+assert.strictEqual(Model.clampNightlight(9000), 6500)
+assert.ok(Model.nightlightIsOn(4000))
+assert.ok(!Model.nightlightIsOn(6500))
+assert.ok(!Model.nightlightIsOn(6000))
 
 const leaf = { parent: { parent: { moduleSlots: [{ opacity: 1 }, { opacity: 1 }], barHovered: false, barHidden: false, parent: null } } }
 assert.strictEqual(Model.findHostBar(leaf).moduleSlots.length, 2)

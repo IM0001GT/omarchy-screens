@@ -457,6 +457,25 @@ function clampBrightness(value) {
   return Math.max(1, Math.min(100, Math.round(n)))
 }
 
+// Match omarchy-toggle-nightlight: 4000 on, 6500 off, below 6000 counts as night.
+var NIGHTLIGHT_MIN = 1500
+var NIGHTLIGHT_MAX = 6500
+var NIGHTLIGHT_ON = 4000
+var NIGHTLIGHT_OFF = 6500
+var NIGHTLIGHT_IDENTITY = 6000
+
+function clampNightlight(value) {
+  var n = Math.round(Number(value))
+  if (!isFinite(n)) return NIGHTLIGHT_ON
+  if (n < NIGHTLIGHT_MIN) return NIGHTLIGHT_MIN
+  if (n > NIGHTLIGHT_MAX) return NIGHTLIGHT_MAX
+  return n
+}
+
+function nightlightIsOn(temp) {
+  return temp !== null && temp !== undefined && Number(temp) < NIGHTLIGHT_IDENTITY
+}
+
 function lastDisplayQuip(index) {
   var lines = [
     "Nice try",
@@ -744,6 +763,13 @@ if (typeof module !== "undefined") {
     reflowAfterResize: reflowAfterResize,
     scanoutLabel: scanoutLabel,
     clampBrightness: clampBrightness,
+    clampNightlight: clampNightlight,
+    nightlightIsOn: nightlightIsOn,
+    NIGHTLIGHT_MIN: NIGHTLIGHT_MIN,
+    NIGHTLIGHT_MAX: NIGHTLIGHT_MAX,
+    NIGHTLIGHT_ON: NIGHTLIGHT_ON,
+    NIGHTLIGHT_OFF: NIGHTLIGHT_OFF,
+    NIGHTLIGHT_IDENTITY: NIGHTLIGHT_IDENTITY,
     brightnessName: brightnessName,
     lastDisplayQuip: lastDisplayQuip,
     splitCounts: splitCounts,
