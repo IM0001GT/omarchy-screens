@@ -71,7 +71,9 @@ Panel {
   property bool layoutMenuOpen: false
   property bool layoutDirty: false
   property bool pendingConfirm: false
+  onPendingConfirmChanged: if (root.careService) root.careService.pendingConfirm = root.pendingConfirm
   property int revertLeft: 10
+  onRevertLeftChanged: if (root.careService) root.careService.revertLeft = root.revertLeft
   property var liveMonitors: []
   property int liveTextPx: 12
   readonly property var textSizeStops: [9, 10, 11, 12, 14, 16, 20]
@@ -374,6 +376,24 @@ Panel {
       if (!root.opened) root.open()
     }
     applyProc.running = true
+  }
+
+  function open() {
+    if (root.careService) root.careService.panelWanted = true
+    root.controller.show()
+  }
+
+  function close() {
+    if (root.careService) root.careService.panelWanted = false
+    root.controller.hide()
+  }
+
+  function remountPanel() {
+    if (!root.pendingConfirm && !(root.careService && root.careService.panelWanted))
+      return
+    if (root.careService) root.careService.panelWanted = true
+    root.controller.hide()
+    Qt.callLater(function() { root.controller.show() })
   }
 
   function applyDraft() {
@@ -816,6 +836,13 @@ Panel {
   Component.onCompleted: {
     refresh()
     root.applyCareVisuals()
+    if (root.careService && root.careService.pendingConfirm) {
+      root.pendingConfirm = true
+      root.revertLeft = root.careService.revertLeft || 10
+      revertTick.restart()
+    }
+    if (root.careService && root.careService.panelWanted)
+      Qt.callLater(function() { root.open() })
   }
   Component.onDestruction: {
     if (root.careHover) {
@@ -826,22 +853,35 @@ Panel {
     if (win && win.contentItem) win.contentItem.opacity = 1
   }
   onOpenedChanged: {
-    if (!opened) {
-      root.detectNote = ""
-      root.detectPending = false
-      root.hdrTuning = false
-      root.barCareOpen = false
-      if (root.pendingConfirm) root.revertLayout()
-      else if (root.layoutDirty) root.undoDraft()
+    if (opened) {
+      if (root.careService) root.careService.panelWanted = true
+      root.userPicked = false
+      root.lastDisplayBounce = false
+      root.lastDisplayQuip = ""
+      refresh()
       return
     }
-    root.userPicked = false
-    root.lastDisplayBounce = false
-    root.lastDisplayQuip = ""
-    refresh()
+    if (root.careService && root.careService.panelWanted) {
+      Qt.callLater(function() {
+        if (root.careService && root.careService.panelWanted) root.open()
+      })
+      return
+    }
+    root.detectNote = ""
+    root.detectPending = false
+    root.hdrTuning = false
+    root.barCareOpen = false
+    if (root.pendingConfirm) root.revertLayout()
+    else if (root.layoutDirty) root.undoDraft()
   }
 
   onSelectedIndexChanged: if (root.opened) root.refreshBrightness()
+
+  readonly property int screenCount: Quickshell.screens ? Quickshell.screens.length : 0
+  onScreenCountChanged: {
+    if (root.pendingConfirm || (root.careService && root.careService.panelWanted))
+      Qt.callLater(root.remountPanel)
+  }
 
   IpcHandler {
     enabled: root.isFocusedBar

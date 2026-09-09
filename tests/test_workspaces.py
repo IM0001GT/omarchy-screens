@@ -699,6 +699,28 @@ class LastInternalRecover(unittest.TestCase):
         monitors = [{"name": "eDP-1", "enabled": True}]
         self.assertFalse(self.ctl.recover_last_internal(monitors))
 
+    def test_recover_when_drm_only_has_laptop(self):
+        self.assertTrue(self.ctl.should_recover_internal(["eDP-1"]))
+        self.assertFalse(self.ctl.should_recover_internal(["eDP-1", "DP-3"]))
+        self.assertFalse(self.ctl.should_recover_internal(["DP-3"]))
+        self.assertFalse(self.ctl.should_recover_internal([]))
+
+    def test_recover_despite_hypr_ghost_external(self):
+        monitors = [
+            {"name": "eDP-1", "enabled": False, "mode": "1920x1200@60"},
+            {"name": "DP-3", "enabled": True, "mode": "2560x1440@60"},
+        ]
+        monitors, changed = self.ctl.enable_drm_internals(monitors, ["eDP-1"])
+        self.assertTrue(changed)
+        self.assertTrue(next(m for m in monitors if m["name"] == "eDP-1")["enabled"])
+
+    def test_recover_stubs_edp_when_hypr_empty(self):
+        monitors, changed = self.ctl.enable_drm_internals([], ["eDP-1"])
+        self.assertTrue(changed)
+        self.assertEqual(len(monitors), 1)
+        self.assertEqual(monitors[0]["name"], "eDP-1")
+        self.assertTrue(monitors[0]["enabled"])
+
     def test_monitor_lua_does_not_disable_internal(self):
         line = self.ctl.monitor_lua(
             {

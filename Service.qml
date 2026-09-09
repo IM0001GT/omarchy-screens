@@ -14,6 +14,9 @@ Item {
     Quickshell.env("HOME") + "/.local/state/im0001gt.screens/bar-care.json"
 
   property var careConfig: Model.normalizeBarCare(null)
+  property bool panelWanted: false
+  property bool pendingConfirm: false
+  property int revertLeft: 0
 
   readonly property var bar: shell && shell.bar ? shell.bar : null
   readonly property bool barHovered: bar ? !!bar.barHovered : false
@@ -43,15 +46,20 @@ Item {
     var vals = Hyprland.monitors && Hyprland.monitors.values
     return vals ? vals.length : 0
   }
+  property int recoverTries: 0
+
+  function requestRecover() {
+    root.recoverTries = 0
+    recoverRetry.restart()
+    if (!recoverProc.running) recoverProc.running = true
+  }
 
   Component.onCompleted: {
     if (!claimProc.running) claimProc.running = true
     Qt.callLater(root.applyCareVisuals)
+    Qt.callLater(root.requestRecover)
   }
-  onHyprMonitorCountChanged: {
-    if (root.hyprMonitorCount <= 0) return
-    if (!recoverProc.running) recoverProc.running = true
-  }
+  onHyprMonitorCountChanged: root.requestRecover()
   onCareConfigChanged: root.applyCareVisuals()
   onBarHoveredChanged: root.applyCareVisuals()
   onBarHiddenChanged: root.applyCareVisuals()
@@ -67,6 +75,20 @@ Item {
     id: recoverProc
     command: [root.ctl, "recover-internal"]
     stdout: StdioCollector { waitForEnd: true }
+  }
+
+  Timer {
+    id: recoverRetry
+    interval: 800
+    repeat: true
+    onTriggered: {
+      root.recoverTries += 1
+      if (root.recoverTries >= 8) {
+        running = false
+        return
+      }
+      if (!recoverProc.running) recoverProc.running = true
+    }
   }
 
   FileView {

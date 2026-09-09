@@ -1241,17 +1241,43 @@ def is_internal_panel(mon):
     return bool(INTERNAL_PANEL_RE.match(str(name or "")))
 
 
-def recover_last_internal(monitors):
-    """If nothing enabled remains, turn the laptop panel back on."""
-    if not monitors:
-        return False
-    if any(m.get("enabled", True) for m in monitors):
-        return False
+def should_recover_internal(drm_names=None):
+    names = list(drm_names) if drm_names is not None else drm_connected_names()
+    has_internal = any(is_internal_panel(n) for n in names)
+    has_external = any(not is_internal_panel(n) for n in names)
+    return bool(has_internal and not has_external)
+
+
+def enable_drm_internals(monitors, drm_names):
+    """Put every DRM-connected laptop panel in the list and turn it on."""
+    monitors = list(monitors or [])
     changed = False
-    for mon in monitors:
-        if is_internal_panel(mon) and not mon.get("enabled", True):
-            mon["enabled"] = True
+    have = {m.get("name") for m in monitors}
+    for name in drm_names or []:
+        if not is_internal_panel(name):
+            continue
+        if name not in have:
+            stub = stub_monitor(name)
+            stub["enabled"] = True
+            monitors.append(stub)
+            have.add(name)
             changed = True
+            continue
+        for mon in monitors:
+            if mon.get("name") == name and not mon.get("enabled", True):
+                mon["enabled"] = True
+                changed = True
+    return monitors, changed
+
+
+def recover_last_internal(monitors, drm_names=None):
+    """If nothing enabled remains, turn the laptop panel back on."""
+    names = drm_names
+    if names is None:
+        names = [m.get("name") for m in (monitors or []) if m.get("name")]
+    if not should_recover_internal(names):
+        return False
+    _, changed = enable_drm_internals(monitors, names)
     return changed
 
 
@@ -1326,13 +1352,28 @@ def monitors_lua_needs_rewrite(text):
 
 
 def recover_internal(quiet=False):
-    data = snapshot()
-    monitors = data.get("monitors") or []
-    if not recover_last_internal(monitors):
+    drm_names = drm_connected_names()
+    if not should_recover_internal(drm_names):
         return 0
     set_internal_toggle(False)
+    data = snapshot()
+    monitors = data.get("monitors") or []
+    monitors, changed = enable_drm_internals(monitors, drm_names)
+    if not monitors:
+        return 0
     write_monitors_lua(monitors)
     reload_hypr()
+    for name in drm_names:
+        if not is_internal_panel(name):
+            continue
+        run([
+            "hyprctl",
+            "eval",
+            "hl.monitor({ output = %s, mode = \"preferred\", position = \"auto\", scale = \"auto\" })"
+            % lua_str(name),
+        ])
+    run(["hyprctl", "dispatch", 'hl.dsp.dpms({ action = "enable" })'])
+    run(["omarchy-hyprland-monitor-internal", "recover"])
     remember_layout(monitors)
     if not quiet:
         print(json.dumps(snapshot(), separators=(",", ":")))
