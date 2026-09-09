@@ -326,7 +326,7 @@ class ConflictMessages(unittest.TestCase):
     def setUp(self):
         self.ctl = load_ctl()
 
-    def test_blocking_tells_user_to_remove_it(self):
+    def test_blocking_offers_unmanage_or_remove(self):
         msg = self.ctl.conflict_message({
             "plugin": True,
             "enabled": True,
@@ -334,10 +334,10 @@ class ConflictMessages(unittest.TestCase):
             "package": False,
             "blocking": True,
         })
+        self.assertIn("hyprmoncfg unmanage", msg)
         self.assertIn("crmne.hyprmoncfg", msg)
-        self.assertIn("omarchy plugin remove", msg)
-        self.assertIn("yield", msg)
-        self.assertIn("will not disable it for you", msg)
+        self.assertIn("wait", msg)
+        self.assertIn("until you pick", msg)
         self.assertNotIn("system" + "ctl", msg)
 
     def test_leftover_plugin_does_not_claim_to_yield(self):
@@ -348,11 +348,12 @@ class ConflictMessages(unittest.TestCase):
             "package": False,
             "blocking": False,
         })
-        self.assertIn("crmne.hyprmoncfg", msg)
-        self.assertNotIn("yield", msg)
-        self.assertIn("will not disable it for you", msg)
+        self.assertIn("not managing", msg)
+        self.assertNotIn("wait until you hand", msg)
+        self.assertIn("leave it unmanaged", msg)
 
     def test_public_conflict_includes_leftover_plugin_dir(self):
+        self.ctl.load_store = lambda: {"hyprmoncfgChoiceSeen": False}
         info = {
             "id": "crmne.hyprmoncfg",
             "name": "hyprmoncfg",
@@ -491,6 +492,61 @@ class HyprModDetect(unittest.TestCase):
         self.assertTrue(info["blocking"])
         self.assertEqual(info["outputs"], ["DP-1"])
 
+    def test_unmanaged_status_is_not_blocking(self):
+        result = type("Result", (), {
+            "returncode": 0,
+            "stdout": '{"daemon":{"running":true,"unmanaged":true}}',
+        })()
+        self.ctl.run = lambda *args, **kwargs: result
+        self.ctl.process_named = lambda name: True
+        self.ctl.user_unit_wanted = lambda unit: True
+        self.ctl.plugin_enabled = lambda plugin_id: True
+        self.ctl.hyprmoncfg_include_active = lambda: False
+        self.ctl.hyprmoncfg_unmanaged_file = lambda: True
+        info = self.ctl.detect_hyprmoncfg()
+        self.assertTrue(info["unmanaged"])
+        self.assertFalse(info["blocking"])
+
+    def test_include_line_is_blocking(self):
+        self.ctl.run = lambda *args, **kwargs: type("Result", (), {
+            "returncode": 1,
+            "stdout": "",
+        })()
+        self.ctl.process_named = lambda name: False
+        self.ctl.user_unit_wanted = lambda unit: False
+        self.ctl.plugin_enabled = lambda plugin_id: False
+        self.ctl.hyprmoncfg_include_active = lambda: True
+        self.ctl.hyprmoncfg_unmanaged_file = lambda: False
+        info = self.ctl.detect_hyprmoncfg()
+        self.assertTrue(info["blocking"])
+        self.assertTrue(info["include"])
+
+    def test_running_managed_daemon_is_detected_from_status(self):
+        result = type("Result", (), {
+            "returncode": 0,
+            "stdout": '{"daemon":{"running":true}}',
+        })()
+        self.ctl.run = lambda *args, **kwargs: result
+        self.assertTrue(self.ctl.hyprmoncfg_management_state())
+
+    def test_choice_seen_hides_leftover(self):
+        import tempfile
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.ctl.BACKUP_DIR = tmp.name
+        self.ctl.PROFILES_PATH = os.path.join(tmp.name, "profiles.json")
+        self.ctl.save_store({"hyprmoncfgChoiceSeen": True})
+        info = {
+            "id": "crmne.hyprmoncfg",
+            "plugin": True,
+            "enabled": False,
+            "daemon": True,
+            "package": True,
+            "blocking": False,
+            "message": "leftover",
+        }
+        self.assertIsNone(self.ctl.public_conflict(info))
+
     def test_merge_mentions_both_managers(self):
         hm = {
             "id": "crmne.hyprmoncfg",
@@ -606,17 +662,24 @@ class BarCare(unittest.TestCase):
 
 
 class ConflictsCli(unittest.TestCase):
-    def test_remove_is_refused(self):
-        import subprocess
-        out = subprocess.run(
-            [CTL, "conflicts", "remove"],
-            capture_output=True,
-            text=True,
-            timeout=8,
-        )
-        self.assertEqual(out.returncode, 2)
-        self.assertIn("does not remove other plugins", out.stderr)
-        self.assertFalse((out.stdout or "").strip())
+    def test_unknown_action_is_refused(self):
+        self.ctl = load_ctl()
+        self.assertEqual(self.ctl.handoff_hyprmoncfg("uninstall"), 2)
+
+    def test_keep_marks_choice_without_shelling_out(self):
+        import tempfile
+        self.ctl = load_ctl()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.ctl.BACKUP_DIR = tmp.name
+        self.ctl.PROFILES_PATH = os.path.join(tmp.name, "profiles.json")
+        self.ctl.snapshot = lambda: {"ok": True}
+        calls = []
+        self.ctl.run = lambda cmd, timeout=4: calls.append(cmd)
+        rc = self.ctl.handoff_hyprmoncfg("keep")
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [])
+        self.assertTrue(self.ctl.load_store().get("hyprmoncfgChoiceSeen"))
 
 
 class MarketplaceHygiene(unittest.TestCase):

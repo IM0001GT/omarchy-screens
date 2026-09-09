@@ -892,6 +892,16 @@ Panel {
     root.conflictDismissed = true
   }
 
+  readonly property bool hyprmoncfgConflict: {
+    var id = root.conflict && root.conflict.id ? String(root.conflict.id) : ""
+    return id === "crmne.hyprmoncfg" || id === "display-managers" || id === "hyprmoncfg"
+  }
+
+  function runConflictAction(action) {
+    conflictActionProc.command = [root.ctl, "conflicts", action]
+    if (!conflictActionProc.running) conflictActionProc.running = true
+  }
+
   function setScaleKeys(action) {
     root.runStore(["scale-keys", action])
   }
@@ -1316,6 +1326,19 @@ Panel {
 
 
   Process {
+    id: conflictActionProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try { root.adopt(JSON.parse(text)) }
+        catch (e) { root.refresh() }
+        if (!(root.conflict && root.conflict.blocking))
+          root.conflictDismissed = true
+      }
+    }
+  }
+
+  Process {
     id: setBrightnessProc
     stdout: StdioCollector { waitForEnd: true }
     onRunningChanged: {
@@ -1447,14 +1470,46 @@ Panel {
               wrapMode: Text.WordWrap
               text: (root.conflict && root.conflict.message)
                 ? root.conflict.message
-                : "Another display tool is still managing your screens. Screens will not disable it for you."
+                : "Another display tool is still managing your screens."
               color: root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
             }
 
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+              visible: root.hyprmoncfgConflict
+
+              Button {
+                visible: !!(root.conflict && (root.conflict.canUnmanage || root.conflict.unmanaged))
+                width: (parent.width - parent.spacing) / (root.conflict && root.conflict.canRemove ? 2 : 1)
+                text: (root.conflict && root.conflict.blocking) ? "Keep unmanaged" : "Keep it"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                tooltipText: (root.conflict && root.conflict.blocking)
+                  ? "Run hyprmoncfg unmanage so Screens can take over. The hyprmoncfg plugin can stay installed."
+                  : "Leave hyprmoncfg installed. It is not managing Hyprland."
+                onClicked: root.runConflictAction((root.conflict && root.conflict.blocking) ? "unmanage" : "keep")
+              }
+
+              Button {
+                visible: !!(root.conflict && root.conflict.canRemove)
+                width: (parent.width - parent.spacing) / (root.conflict && (root.conflict.canUnmanage || root.conflict.unmanaged) ? 2 : 1)
+                text: "Remove hyprmoncfg"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                tooltipText: "Unmanage, then remove the crmne.hyprmoncfg plugin. The AUR package is left unless you drop it yourself."
+                onClicked: root.runConflictAction("remove")
+              }
+            }
+
             Button {
-              text: "Got it"
+              text: root.hyprmoncfgConflict ? "Later" : "Got it"
               fontSize: Style.font.caption
               fontFamily: root.bar.fontFamily
               foreground: root.bar.foreground

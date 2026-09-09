@@ -22,7 +22,7 @@ Commands:
   restore-original   put those first snapshots back and reload Hyprland
   claim              backup leftover config, take over monitors.lua, restore scale keys, install workspaces plugin
   recover-internal   re-enable the laptop panel if it is the last remaining output
-  conflicts          show hyprmoncfg / HyprMod / other display managers still in control
+  conflicts [check|unmanage|remove|keep]  hyprmoncfg / HyprMod handoff
   bar-care <key> <value>  persist bar dim / hover lift
   scale up|down|N    step focused-display scale
   scale-keys take|skip|alt|set <up> <down>  keep, skip, or change scale keybinds
@@ -72,6 +72,7 @@ HYPRMONCFG_PLUGIN_DIR = os.path.expanduser(
 )
 HYPRMONCFG_DAEMON = "hyprmoncfgd"
 HYPRMONCFG_UNIT = HYPRMONCFG_DAEMON + ".service"
+HYPRMONCFG_UNMANAGED = os.path.expanduser("~/.config/hyprmoncfg/unmanaged")
 HYPRLAND_LUA = os.path.expanduser("~/.config/hypr/hyprland.lua")
 HYPRLAND_CONF = os.path.expanduser("~/.config/hypr/hyprland.conf")
 HYPRMOD_GUI_LUA = os.path.expanduser("~/.config/hypr/hyprland-gui.lua")
@@ -781,6 +782,7 @@ def load_store():
         "deskLayout": [],
         "hybridNoticeShown": False,
         "claimedMonitors": False,
+        "hyprmoncfgChoiceSeen": False,
         "manageWorkspaces": False,
         "workspaceLayouts": {},
         "workspacesBarId": "",
@@ -804,6 +806,7 @@ def load_store():
                 store["deskLayout"] = desk_layout
             store["hybridNoticeShown"] = bool(data.get("hybridNoticeShown"))
             store["claimedMonitors"] = bool(data.get("claimedMonitors"))
+            store["hyprmoncfgChoiceSeen"] = bool(data.get("hyprmoncfgChoiceSeen"))
             store["manageWorkspaces"] = bool(data.get("manageWorkspaces"))
             layouts = data.get("workspaceLayouts")
             if isinstance(layouts, dict):
@@ -2127,32 +2130,52 @@ def plugin_enabled(plugin_id):
     return False
 
 
+def hyprmoncfg_include_active():
+    """True when Hyprland still loads hyprmoncfg's generated monitor file."""
+    needle = re.compile(r"hyprmoncfg-monitors", re.I)
+    if hypr_lua_mode():
+        return bool(needle.search(read_hypr_text(HYPRLAND_LUA)))
+    return bool(needle.search(read_hypr_text(HYPRLAND_CONF)))
+
+
+def hyprmoncfg_unmanaged_file():
+    return os.path.isfile(HYPRMONCFG_UNMANAGED)
+
+
+def hyprmoncfg_management_state():
+    """True when managed, False when unmanaged, None if unknown."""
+    out = run(["hyprmoncfg", "status", "--json"], timeout=8)
+    if not out or out.returncode != 0 or not (out.stdout or "").strip():
+        return None
+    try:
+        payload = json.loads(out.stdout)
+    except json.JSONDecodeError:
+        return None
+    daemon = payload.get("daemon") if isinstance(payload, dict) else None
+    if not isinstance(daemon, dict):
+        return None
+    if daemon.get("unmanaged") is True:
+        return False
+    if daemon.get("running") is True:
+        return True
+    return None
+
+
 _conflict_cache = {"at": 0.0, "info": None}
 
 
 def conflict_message(info):
-    bits = []
-    if info.get("plugin") or info.get("enabled"):
-        bits.append("the crmne.hyprmoncfg plugin")
-    if info.get("daemon"):
-        bits.append("the hyprmoncfgd daemon")
-    if info.get("package") and not bits:
-        bits.append("the hyprmoncfg package")
-    who = " and ".join(bits) if bits else "hyprmoncfg"
     if info.get("blocking"):
-        extra = (
-            "It stays in control of screen settings until you remove it. "
-            "Screens will yield until then, and will not disable it for you. "
-        )
-    else:
-        extra = (
-            "Remove it if you are not using it. Screens will not disable it for you. "
+        return (
+            "hyprmoncfg is currently managing your displays. Screens will wait "
+            "until you hand them off. Keep the plugin and turn off Managed by "
+            "hyprmoncfg (or run hyprmoncfg unmanage), or remove crmne.hyprmoncfg. "
+            "Screens will not do either until you pick."
         )
     return (
-        "Found %s. %s"
-        "Use: omarchy plugin remove crmne.hyprmoncfg — "
-        "and stop hyprmoncfgd yourself if it is still running."
-        % (who, extra)
+        "hyprmoncfg is still installed but is not managing Hyprland. "
+        "You can leave it unmanaged, or remove the plugin if you do not want "
+        "both on the bar."
     )
 
 
@@ -2295,9 +2318,25 @@ def detect_hyprmoncfg():
     daemon_running = process_named(HYPRMONCFG_DAEMON)
     daemon_wanted = user_unit_wanted(HYPRMONCFG_UNIT)
     package = bool(shutil.which(HYPRMONCFG_DAEMON) or shutil.which("hyprmoncfg"))
-    blocking = bool(enabled or daemon_running or daemon_wanted)
-    present = bool(plugin or blocking or package)
-    shown = blocking or plugin
+    include = hyprmoncfg_include_active()
+    status = hyprmoncfg_management_state()
+    unmanaged = status is False or (status is None and hyprmoncfg_unmanaged_file() and not include)
+    if include or status is True:
+        blocking = True
+    elif unmanaged:
+        blocking = False
+    else:
+        blocking = bool(enabled or daemon_running or daemon_wanted)
+    present = bool(plugin or daemon_running or daemon_wanted or package or include)
+    shown = blocking or plugin or daemon_running or daemon_wanted
+    info = {
+        "plugin": plugin,
+        "enabled": enabled,
+        "daemon": daemon_running or daemon_wanted,
+        "package": package,
+        "blocking": blocking,
+        "unmanaged": unmanaged,
+    }
     return {
         "id": HYPRMONCFG_PLUGIN_ID,
         "name": "hyprmoncfg",
@@ -2306,15 +2345,13 @@ def detect_hyprmoncfg():
         "daemon": daemon_running or daemon_wanted,
         "daemonActive": daemon_running,
         "package": package,
+        "unmanaged": unmanaged,
+        "include": include,
         "blocking": blocking,
         "present": present,
-        "message": conflict_message({
-            "plugin": plugin,
-            "enabled": enabled,
-            "daemon": daemon_running or daemon_wanted,
-            "package": package,
-            "blocking": blocking,
-        }) if shown else "",
+        "canUnmanage": bool(shutil.which("hyprmoncfg")),
+        "canRemove": bool(plugin or package),
+        "message": conflict_message(info) if shown else "",
     }
 
 
@@ -2341,7 +2378,10 @@ def detect_hyprmod():
 
 
 def merge_conflicts(hyprmoncfg, hyprmod):
-    show_hm = bool(hyprmoncfg.get("blocking") or hyprmoncfg.get("plugin"))
+    choice_seen = bool(load_store().get("hyprmoncfgChoiceSeen"))
+    show_hm = bool(hyprmoncfg.get("blocking") or (
+        (hyprmoncfg.get("plugin") or hyprmoncfg.get("daemon")) and not choice_seen
+    ))
     show_hy = bool(hyprmod.get("blocking"))
     if show_hm and show_hy:
         msg = " ".join(
@@ -2376,7 +2416,13 @@ def detect_conflicts():
 
 
 def public_conflict(info):
-    if not info or not (info.get("blocking") or info.get("plugin")):
+    if not info:
+        return None
+    blocking = bool(info.get("blocking"))
+    leftover = bool((info.get("plugin") or info.get("daemon")) and not blocking)
+    if leftover and load_store().get("hyprmoncfgChoiceSeen"):
+        return None
+    if not blocking and not leftover:
         return None
     return {
         "id": info.get("id") or "",
@@ -2385,7 +2431,10 @@ def public_conflict(info):
         "enabled": bool(info.get("enabled")),
         "daemon": bool(info.get("daemon")),
         "package": bool(info.get("package")),
-        "blocking": bool(info.get("blocking")),
+        "blocking": blocking,
+        "unmanaged": bool(info.get("unmanaged")),
+        "canUnmanage": bool(info.get("canUnmanage") or shutil.which("hyprmoncfg")),
+        "canRemove": bool(info.get("canRemove") or info.get("plugin") or info.get("package")),
         "present": True,
         "message": info.get("message") or "",
         "outputs": list(info.get("outputs") or []),
@@ -2950,10 +2999,55 @@ def pending_revert_due():
     return deadline > 0 and time.time() >= deadline
 
 
+def mark_hyprmoncfg_choice_seen():
+    store = load_store()
+    store["hyprmoncfgChoiceSeen"] = True
+    save_store(store)
+    clear_conflict_cache()
+
+
+def handoff_hyprmoncfg(mode):
+    """User-picked handoff: unmanage, remove, or keep the leftover install."""
+    action = str(mode or "").strip().lower()
+    if action not in ("unmanage", "remove", "keep"):
+        print("conflicts: unmanage|remove|keep", file=sys.stderr)
+        return 2
+    if action == "keep":
+        mark_hyprmoncfg_choice_seen()
+        print(json.dumps(snapshot(), separators=(",", ":")))
+        return 0
+    if action == "unmanage":
+        if shutil.which("hyprmoncfg"):
+            run(["hyprmoncfg", "unmanage"], timeout=20)
+        mark_hyprmoncfg_choice_seen()
+        info = detect_conflicts()
+        if not info.get("blocking"):
+            claim_monitors(force=True)
+        print(json.dumps(snapshot(), separators=(",", ":")))
+        return 0 if not detect_conflicts().get("blocking") else 1
+    if shutil.which("hyprmoncfg"):
+        run(["hyprmoncfg", "unmanage"], timeout=20)
+    run(["omarchy", "plugin", "remove", HYPRMONCFG_PLUGIN_ID], timeout=30)
+    mark_hyprmoncfg_choice_seen()
+    info = detect_conflicts()
+    if not info.get("blocking"):
+        claim_monitors(force=True)
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0 if not detect_conflicts().get("blocking") else 1
+
+
 def apply(payload, gdk=None, preview=False):
     monitors = payload.get("monitors") if isinstance(payload, dict) else None
     if not isinstance(monitors, list) or not monitors:
         print("apply: expected {\"monitors\": [...]}", file=sys.stderr)
+        return 2
+    conflicts = detect_conflicts()
+    if conflicts.get("blocking"):
+        print(
+            conflicts.get("message")
+            or "another display tool is managing the screens",
+            file=sys.stderr,
+        )
         return 2
     known = {clean_connector(m.get("name")) for m in monitors if clean_connector(m.get("name"))}
     monitors = [sanitize_monitor(m, known) for m in monitors]
@@ -3785,23 +3879,17 @@ def main(argv):
         return recover_internal()
     if cmd == "conflicts":
         action = argv[1] if len(argv) > 1 else ""
-        if action in ("remove", "uninstall"):
-            print(
-                "conflicts: Screens does not remove other plugins. "
-                "Remove hyprmoncfg yourself, or open HyprMod and trash "
-                "its per-display monitor rules.",
-                file=sys.stderr,
-            )
-            return 2
+        if action in ("unmanage", "remove", "keep"):
+            return handoff_hyprmoncfg(action)
         info = detect_conflicts()
         payload = public_conflict(info) or {"present": False, "blocking": False}
         if action in ("--check", "check"):
-            if info.get("blocking") or info.get("plugin"):
+            if payload.get("present"):
                 print(json.dumps(payload, separators=(",", ":")))
                 return 1
             return 0
         print(json.dumps(payload, separators=(",", ":")))
-        return 1 if (info.get("blocking") or info.get("plugin")) else 0
+        return 1 if payload.get("present") else 0
     if cmd == "bar-care":
         return set_bar_care(
             argv[1] if len(argv) > 1 else "",

@@ -23,7 +23,7 @@ Omarchy's Display widget does brightness, text size, and scale. It does not arra
 Other listed tools cover adjacent jobs:
 
 - **Stock Display** — backlight, font size, scale presets, enable/disable
-- **hyprmoncfg** — named profiles and a hotplug daemon. If that plugin or `hyprmoncfgd` is still installed, it stays in control of screen settings. Screens warns and yields until **you** remove it; it will not disable another plugin or daemon for you
+- **hyprmoncfg** — named profiles and a hotplug daemon. If it is still **managing** Hyprland, Screens waits and offers a choice: keep the plugin and run `hyprmoncfg unmanage`, or remove `crmne.hyprmoncfg`. Screens will not do either until you pick. An unmanaged leftover is not treated as in control.
 - **HyprMod** — GTK settings app. If it still has per-display monitor rules, those load after `monitors.lua` and win. Screens warns until **you** open HyprMod, click the trash can next to each managed display, and save; it will not delete HyprMod's rules for you
 - **Generic layout editors** — often reuse the stock monitor glyph, skip snap, and leave HDR/VRR in `monitors.lua`
 
@@ -41,7 +41,7 @@ That places the plugin in `~/.config/omarchy/plugins/im0001gt.screens/` and can 
 
 The first time Screens runs, it copies every stock file it may change into `~/.local/state/im0001gt.screens/originals/` (and a copy of `monitors.lua` at `original-monitors.lua`). Those copies are never overwritten, live outside the plugin directory, and do not depend on a system snapshot. It then starts from a **fresh** Screens-owned `monitors.lua` taken from the live Hyprland layout, so leftover edits from hyprmoncfg or another layout tool cannot keep controlling the desk.
 
-If the [hyprmoncfg](https://github.com/crmne/omarchy-hyprmoncfg) plugin or its `hyprmoncfgd` daemon is still present, the Screens panel warns that it will stay in control until **you** remove it. Screens does not remove other plugins or stop other daemons. Typical cleanup is `omarchy plugin remove crmne.hyprmoncfg`, then stop `hyprmoncfgd` yourself if it is still running. The package is left in place unless you uninstall it.
+If [hyprmoncfg](https://github.com/crmne/omarchy-hyprmoncfg) is still managing displays, the Screens panel offers **Keep unmanaged** (`hyprmoncfg unmanage`, plugin can stay) or **Remove hyprmoncfg** (unmanage, then `omarchy plugin remove crmne.hyprmoncfg`). Screens does not do either until you click. If hyprmoncfg is already unmanaged, Screens takes over and only reminds you the plugin is still on the bar until you keep or remove it. The AUR package is left unless you drop it yourself.
 
 If [HyprMod](https://github.com/BlueManCZ/hyprmod) is managing displays, its `hyprland-gui.lua` (or `.conf`) rules load after Screens and keep winning. Open HyprMod, click the trash can next to each monitor, and save. You can keep HyprMod for other settings. Screens does not remove those rules.
 
