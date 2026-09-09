@@ -670,6 +670,31 @@ function barOpacityFor(care, state) {
   return opacity
 }
 
+function findHostBar(item) {
+  var node = item
+  for (var i = 0; i < 24 && node; i++) {
+    if (node.moduleSlots)
+      return node
+    node = node.parent
+  }
+  return null
+}
+
+function applyBarCare(bar, care, state) {
+  if (!bar || !bar.moduleSlots)
+    return false
+  var slots = bar.moduleSlots
+  var hovered = !!(state && state.hovered) || !!bar.barHovered
+  var hidden = !!(state && state.barHidden) || !!bar.barHidden
+  var opacity = barOpacityFor(care, { hovered: hovered, barHidden: hidden })
+  var i
+  for (i = 0; i < slots.length; i++) {
+    if (!slots[i]) continue
+    try { slots[i].opacity = opacity } catch (e) {}
+  }
+  return true
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     clone: clone,
@@ -708,6 +733,8 @@ if (typeof module !== "undefined") {
     layoutLabel: layoutLabel,
     clampBarDim: clampBarDim,
     normalizeBarCare: normalizeBarCare,
-    barOpacityFor: barOpacityFor
+    barOpacityFor: barOpacityFor,
+    findHostBar: findHostBar,
+    applyBarCare: applyBarCare
   }
 }

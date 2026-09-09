@@ -31,23 +31,12 @@ Item {
   }
 
   function applyCareVisuals() {
-    var bar = root.bar
-    if (!bar) return
-    var slots = bar.moduleSlots || []
-    var on = root.careEnabled && !root.barHidden
-    var i, slot, target
-    for (i = 0; i < slots.length; i++) {
-      slot = slots[i]
-      if (!slot) continue
-      target = 1
-      if (on) {
-        target = Model.barOpacityFor(root.careConfig, {
-          hovered: root.barHovered,
-          barHidden: false
-        })
-      }
-      try { slot.opacity = target } catch (e) {}
-    }
+    var host = Model.findHostBar(root)
+    if (!host && root.bar && root.bar.moduleSlots) host = root.bar
+    Model.applyBarCare(host, root.careConfig, {
+      hovered: root.barHovered,
+      barHidden: root.barHidden
+    })
   }
 
   readonly property int hyprMonitorCount: {

@@ -34,6 +34,18 @@ assert.ok(Model.barOpacityFor({ enabled: true, dim: 40 }, { hovered: true }) ===
 assert.ok(Model.barOpacityFor({ enabled: true, dim: 40, hoverLift: false }, { hovered: true }) < 1)
 assert.strictEqual(Model.barOpacityFor({ enabled: true, dim: 100 }, {}), 0)
 assert.strictEqual(Model.clampBarDim(140), 100)
+
+const leaf = { parent: { parent: { moduleSlots: [{ opacity: 1 }, { opacity: 1 }], barHovered: false, barHidden: false, parent: null } } }
+assert.strictEqual(Model.findHostBar(leaf).moduleSlots.length, 2)
+assert.strictEqual(Model.findHostBar({ parent: null }), null)
+assert.strictEqual(Model.findHostBar(null), null)
+const slots = [{ opacity: 1 }, { opacity: 1 }]
+assert.ok(Model.applyBarCare({ moduleSlots: slots, barHovered: false }, { enabled: true, dim: 40, hoverLift: true }))
+assert.ok(slots[0].opacity < 0.7)
+assert.ok(Model.applyBarCare({ moduleSlots: slots, barHovered: true }, { enabled: true, dim: 40, hoverLift: true }))
+assert.strictEqual(slots[0].opacity, 1)
+assert.ok(!Model.applyBarCare({ barHovered: false }, { enabled: true, dim: 40 }))
+assert.ok(!Model.applyBarCare(null, { enabled: true, dim: 40 }))
 assert.strictEqual(Model.formatScale(1.33), "1.33")
 assert.strictEqual(Model.formatScale(1.5), "1.5")
 assert.ok(Model.scaleIsSharp({ width: 3840, height: 2160 }, 1.25))

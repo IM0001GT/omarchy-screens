@@ -51,6 +51,7 @@ Panel {
   property bool hdrTuning: false
   property bool barCareOpen: false
   property var barCare: Model.normalizeBarCare(null)
+  onBarCareChanged: root.applyCareVisuals()
   property bool oledGuard: false
   property bool careDimDragging: false
   property int brightnessPercent: 0
@@ -706,7 +707,19 @@ Panel {
     root.layoutMenuOpen = true
   }
 
+  function hostBar() {
+    var host = Model.findHostBar(root)
+    if (host) return host
+    if (root.bar && root.bar.moduleSlots) return root.bar
+    return null
+  }
+
+  function applyCareVisuals() {
+    Model.applyBarCare(root.hostBar(), root.barCare, {})
+  }
+
   function pushCareToService(next) {
+    root.applyCareVisuals()
     if (!root.careService) return
     root.careService.careConfig = next
     if (typeof root.careService.applyCareVisuals === "function")
@@ -768,7 +781,10 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  Component.onCompleted: refresh()
+  Component.onCompleted: {
+    refresh()
+    root.applyCareVisuals()
+  }
   onOpenedChanged: {
     if (!opened) {
       root.detectNote = ""
@@ -940,6 +956,13 @@ Panel {
     }
     onFileChanged: reload()
     Component.onCompleted: reload()
+  }
+
+  Timer {
+    interval: 400
+    running: !!(root.barCare && root.barCare.enabled)
+    repeat: true
+    onTriggered: root.applyCareVisuals()
   }
 
   Process {

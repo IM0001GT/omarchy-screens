@@ -111,7 +111,7 @@ omarchy plugin update im0001gt.screens --yes
 omarchy restart shell
 ```
 
-**1.12.0** is the Omarchy 4.0.3 fix, plus two older holes. The shell no longer lets a third-party service call `barWidgetRegistry.register()`, so spreading workspaces now ships as a generated companion plugin instead of a runtime registration. Unplugging the last external display re-enables the laptop panel. HDR Auto no longer writes the luminance / Display P3 metadata that washed out Chromium and Electron. Pixel Care still dims only what the scoped bar API exposes; it cannot reach other plugins' widgets.
+**1.12.0** is the Omarchy 4.0.3 fix, plus two older holes. The shell no longer lets a third-party service call `barWidgetRegistry.register()`, so spreading workspaces now ships as a generated companion plugin instead of a runtime registration. Unplugging the last external display re-enables the laptop panel. HDR Auto no longer writes the luminance / Display P3 metadata that washed out Chromium and Electron. Pixel Care walks from the Screens widget to the host bar so it can still dim every slot after Omarchy 4.0.3 scoped away `moduleSlots` on the service facade.
 
 ## Uninstall
 
