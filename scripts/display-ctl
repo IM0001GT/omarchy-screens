@@ -47,6 +47,7 @@ CM_PRESETS = ("auto", "srgb", "dcip3", "dp3", "adobe", "wide", "edid", "hdr", "h
 PROFILES_PATH = os.path.join(BACKUP_DIR, "profiles.json")
 ORIGINAL_BACKUP = os.path.join(BACKUP_DIR, "original-monitors.lua")
 WORKSPACES_JSON = os.path.join(BACKUP_DIR, "workspaces.json")
+PANEL_STATE = os.path.join(BACKUP_DIR, "panel.json")
 LAYOUTS_DIR = os.path.expanduser("~/.local/state/omarchy/workspace-layouts")
 SHELL_JSON = os.path.expanduser("~/.config/omarchy/shell.json")
 BRIGHTNESS_LINK = os.path.expanduser("~/.local/bin/omarchy-brightness-display")
@@ -2834,6 +2835,42 @@ def reload_hypr():
     time.sleep(0.15)
 
 
+def read_panel_state():
+    try:
+        with open(PANEL_STATE, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            return {
+                "wanted": bool(data.get("wanted")),
+                "pendingConfirm": bool(data.get("pendingConfirm")),
+                "deadline": float(data.get("deadline") or 0),
+                "screen": str(data.get("screen") or ""),
+            }
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return {"wanted": False, "pendingConfirm": False, "deadline": 0.0, "screen": ""}
+
+
+def write_panel_state(wanted, pending=False, deadline=0, screen=None):
+    prev = read_panel_state()
+    if screen is None:
+        screen = prev.get("screen") or ""
+    if not wanted:
+        screen = ""
+    payload = {
+        "wanted": bool(wanted),
+        "pendingConfirm": bool(pending),
+        "deadline": float(deadline or 0),
+        "screen": str(screen or ""),
+    }
+    write_private_file(PANEL_STATE, json.dumps(payload) + "\n")
+    return payload
+
+
+def clear_panel_state():
+    return write_panel_state(False, False, 0)
+
+
 def stash_revert_lua(prev_text):
     if os.path.isfile(REVERT_LUA) or not prev_text:
         return
@@ -2851,6 +2888,8 @@ def clear_pending_revert():
     if store.get("pendingRevert"):
         store["pendingRevert"] = None
         save_store(store)
+    st = read_panel_state()
+    write_panel_state(st.get("wanted"), False, 0, st.get("screen") or "")
 
 
 def confirm_layout():
@@ -2934,9 +2973,11 @@ def apply(payload, gdk=None, preview=False):
     else:
         write_workspaces_json(False, [], load_store().get("workspaceLayouts") or {})
     if preview:
+        deadline = time.time() + 20
         store = load_store()
-        store["pendingRevert"] = {"deadline": time.time() + 10}
+        store["pendingRevert"] = {"deadline": deadline}
         save_store(store)
+        write_panel_state(True, True, deadline)
     print(json.dumps(snapshot(), separators=(",", ":")))
     return 0
 
@@ -3630,6 +3671,13 @@ def main(argv):
         return restore_original()
     if cmd == "confirm":
         return confirm_layout()
+    if cmd == "panel-state":
+        action = argv[1] if len(argv) > 1 else ""
+        if action in ("open", "wanted"):
+            write_panel_state(True, True, time.time() + 20)
+            return 0
+        clear_panel_state()
+        return 0
     if cmd == "revert":
         return revert_layout()
     if cmd == "revert-if-due":

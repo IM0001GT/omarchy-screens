@@ -3,6 +3,7 @@ import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
+import Quickshell.Hyprland
 import qs.Ui
 import qs.Commons
 import "Model.js" as Model
@@ -72,7 +73,7 @@ Panel {
   property bool layoutDirty: false
   property bool pendingConfirm: false
   onPendingConfirmChanged: if (root.careService) root.careService.pendingConfirm = root.pendingConfirm
-  property int revertLeft: 10
+  property int revertLeft: 20
   onRevertLeftChanged: if (root.careService) root.careService.revertLeft = root.revertLeft
   property var liveMonitors: []
   property int liveTextPx: 12
@@ -165,6 +166,11 @@ Panel {
   }
   readonly property string carePath:
     Quickshell.env("HOME") + "/.local/state/im0001gt.screens/bar-care.json"
+  readonly property string panelStatePath:
+    Quickshell.env("HOME") + "/.local/state/im0001gt.screens/panel.json"
+  property bool stickyPanel: false
+  property string panelOwnerScreen: ""
+  property int resumeTries: 0
   readonly property var identifyScreen: {
     var name = selected ? selected.name : ""
     var screens = Quickshell.screens
@@ -371,29 +377,148 @@ Panel {
     root.applying = true
     if (preview) {
       root.pendingConfirm = true
-      root.revertLeft = 10
+      root.revertLeft = 20
       revertTick.restart()
+      root.stickyPanel = true
+      root.claimPanelOwner()
+      root.writePanelState(true, true, Date.now() / 1000 + 20)
+      root.armDismissGuard()
+      root.startResumeRetry()
       if (!root.opened) root.open()
     }
     applyProc.running = true
   }
 
+  function claimPanelOwner() {
+    var name = root.barScreenName
+    if (!name) return
+    root.panelOwnerScreen = name
+    if (root.careService) root.careService.panelScreen = name
+  }
+
+  function armDismissGuard() {
+    dismissGuard.restart()
+  }
+
+  function startResumeRetry() {
+    root.resumeTries = 0
+    if (!resumeRetry.running) resumeRetry.restart()
+    Qt.callLater(root.forceShowPanel)
+  }
+
+  function shouldHoldPanel() {
+    return root.applying || dismissGuard.running
+  }
+
+  function isPanelOwner() {
+    var owner = ""
+    if (root.careService && root.careService.panelScreen)
+      owner = String(root.careService.panelScreen)
+    if (!owner) owner = root.panelOwnerScreen
+    if (!owner || owner === root.barScreenName) return true
+    var screens = Quickshell.screens
+    var i
+    for (i = 0; i < (screens ? screens.length : 0); i++) {
+      if (String(screens[i].name) === owner) return false
+    }
+    return true
+  }
+
   function open() {
-    if (root.careService) root.careService.panelWanted = true
+    root.stickyPanel = true
+    root.claimPanelOwner()
+    if (root.careService) {
+      root.careService.panelWanted = true
+      if (root.isPanelOwner()) root.careService.panelMapped = true
+    }
     root.controller.show()
   }
 
   function close() {
-    if (root.careService) root.careService.panelWanted = false
+    // Scale/layout apply remaps layer surfaces. KeyboardPanel's other-output
+    // dismiss overlay then sees a synthetic press and would wipe Keep/Revert.
+    if (root.shouldHoldPanel()) {
+      root.stickyPanel = true
+      root.armDismissGuard()
+      Qt.callLater(root.forceShowPanel)
+      return
+    }
+    root.stickyPanel = false
+    if (root.careService) {
+      root.careService.panelWanted = false
+      root.careService.panelMapped = false
+      root.careService.panelScreen = ""
+    }
+    root.writePanelState(false, false, 0)
     root.controller.hide()
   }
 
-  function remountPanel() {
-    if (!root.pendingConfirm && !(root.careService && root.careService.panelWanted))
+  function writePanelState(wanted, pending, deadline) {
+    if (!panelStateFile) return
+    panelStateFile.setText(JSON.stringify({
+      wanted: !!wanted,
+      pendingConfirm: !!pending,
+      deadline: Number(deadline) || 0,
+      screen: wanted ? (root.panelOwnerScreen || root.barScreenName) : ""
+    }) + "\n")
+  }
+
+  function applyPanelState(data) {
+    if (!data) return
+    var wanted = !!data.wanted
+    var pending = !!data.pendingConfirm
+    if (!wanted && root.shouldHoldPanel()) return
+    var screen = String(data.screen || "")
+    root.stickyPanel = wanted
+    if (wanted && screen) root.panelOwnerScreen = screen
+    if (root.careService) {
+      root.careService.panelWanted = wanted
+      root.careService.pendingConfirm = pending
+      if (wanted && screen) root.careService.panelScreen = screen
+      if (!wanted) {
+        root.careService.panelMapped = false
+        root.careService.panelScreen = ""
+      }
+    }
+    if (pending) {
+      root.pendingConfirm = true
+      var left = Math.ceil(Number(data.deadline || 0) - Date.now() / 1000)
+      if (left < 1) left = 1
+      if (left > 30) left = 30
+      root.revertLeft = left
+      if (!revertTick.running) revertTick.restart()
+    }
+    if (wanted) root.startResumeRetry()
+  }
+
+  function forceShowPanel() {
+    if (!root.stickyPanel) return
+    var win = root.barWindow()
+    if (!win || !win.screen) return
+    if (root.isPanelOwner()) {
+      if (!root.opened) root.controller.show()
       return
+    }
+    var ownerMapped = root.careService && root.careService.panelMapped
+    if (root.resumeTries >= 2 && !ownerMapped) {
+      if (!root.opened) root.controller.show()
+      return
+    }
+    if (root.opened) root.controller.hide()
+  }
+
+  function resumePanel() {
+    root.forceShowPanel()
+  }
+
+  function remountPanel() {
+    if (!root.stickyPanel && !root.pendingConfirm) return
+    root.stickyPanel = true
     if (root.careService) root.careService.panelWanted = true
-    root.controller.hide()
-    Qt.callLater(function() { root.controller.show() })
+    root.armDismissGuard()
+    if (!root.isPanelOwner()) return
+    if (root.opened) root.controller.hide()
+    Qt.callLater(root.forceShowPanel)
   }
 
   function applyDraft() {
@@ -406,6 +531,7 @@ Panel {
     root.pendingConfirm = false
     root.layoutDirty = false
     root.captureLive(root.monitors)
+    root.writePanelState(true, false, 0)
     keepProc.command = [root.ctl, "confirm"]
     if (!keepProc.running) keepProc.running = true
   }
@@ -418,6 +544,7 @@ Panel {
     if (revertProc.running) return
     revertProc.command = [root.ctl, "revert"]
     root.applying = true
+    root.armDismissGuard()
     revertProc.running = true
   }
 
@@ -838,11 +965,14 @@ Panel {
     root.applyCareVisuals()
     if (root.careService && root.careService.pendingConfirm) {
       root.pendingConfirm = true
-      root.revertLeft = root.careService.revertLeft || 10
+      root.revertLeft = root.careService.revertLeft || 20
       revertTick.restart()
     }
-    if (root.careService && root.careService.panelWanted)
-      Qt.callLater(function() { root.open() })
+    if (root.careService && root.careService.panelWanted) {
+      root.stickyPanel = true
+      root.panelOwnerScreen = root.careService.panelScreen || root.panelOwnerScreen
+      root.startResumeRetry()
+    }
   }
   Component.onDestruction: {
     if (root.careHover) {
@@ -854,19 +984,24 @@ Panel {
   }
   onOpenedChanged: {
     if (opened) {
-      if (root.careService) root.careService.panelWanted = true
+      root.stickyPanel = true
+      if (root.careService) {
+        root.careService.panelWanted = true
+        if (root.isPanelOwner()) root.careService.panelMapped = true
+      }
       root.userPicked = false
       root.lastDisplayBounce = false
       root.lastDisplayQuip = ""
       refresh()
       return
     }
-    if (root.careService && root.careService.panelWanted) {
-      Qt.callLater(function() {
-        if (root.careService && root.careService.panelWanted) root.open()
-      })
+    if (root.careService && root.careService.panelScreen === root.barScreenName)
+      root.careService.panelMapped = false
+    if ((root.shouldHoldPanel() || root.stickyPanel) && root.isPanelOwner()) {
+      Qt.callLater(root.forceShowPanel)
       return
     }
+    if (root.stickyPanel) return
     root.detectNote = ""
     root.detectPending = false
     root.hdrTuning = false
@@ -879,8 +1014,30 @@ Panel {
 
   readonly property int screenCount: Quickshell.screens ? Quickshell.screens.length : 0
   onScreenCountChanged: {
-    if (root.pendingConfirm || (root.careService && root.careService.panelWanted))
+    if (root.stickyPanel || root.pendingConfirm) {
+      root.armDismissGuard()
+      root.startResumeRetry()
       Qt.callLater(root.remountPanel)
+    }
+  }
+
+  readonly property string monitorFingerprint: {
+    var vals = Hyprland.monitors && Hyprland.monitors.values
+    var parts = []
+    var i, mon
+    for (i = 0; i < (vals ? vals.length : 0); i++) {
+      mon = vals[i]
+      parts.push(String(mon.name || "") + ":" + String(mon.scale || "") + ":" + String(mon.transform || ""))
+    }
+    return parts.join("|")
+  }
+  onMonitorFingerprintChanged: {
+    if (root.stickyPanel || root.pendingConfirm) {
+      var remapOwner = root.opened && root.isPanelOwner()
+      root.armDismissGuard()
+      root.startResumeRetry()
+      if (remapOwner) Qt.callLater(root.remountPanel)
+    }
   }
 
   IpcHandler {
@@ -928,6 +1085,26 @@ Panel {
   }
 
   Timer {
+    id: dismissGuard
+    interval: 2500
+  }
+
+  Timer {
+    id: resumeRetry
+    interval: 200
+    repeat: true
+    onTriggered: {
+      root.resumeTries += 1
+      if (!root.stickyPanel || root.resumeTries >= 15
+          || (root.opened && root.isPanelOwner())) {
+        running = false
+        return
+      }
+      root.forceShowPanel()
+    }
+  }
+
+  Timer {
     id: revertTick
     interval: 1000
     repeat: true
@@ -963,6 +1140,8 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        if (root.stickyPanel || root.pendingConfirm)
+          root.armDismissGuard()
         root.applying = false
         try { root.adopt(JSON.parse(text)) }
         catch (e) { root.refresh() }
@@ -976,6 +1155,8 @@ Panel {
           root.pendingIdentify = false
           root.identify()
         }
+        if (root.stickyPanel || root.pendingConfirm)
+          root.startResumeRetry()
       }
     }
     onExited: function(code) {
@@ -1032,6 +1213,20 @@ Panel {
     onLoaded: {
       if (root.careDimDragging) return
       try { root.barCare = Model.normalizeBarCare(JSON.parse(text())) }
+      catch (e) {}
+    }
+    onFileChanged: reload()
+    Component.onCompleted: reload()
+  }
+
+  FileView {
+    id: panelStateFile
+    path: root.panelStatePath
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onLoaded: {
+      try { root.applyPanelState(JSON.parse(text() || "{}")) }
       catch (e) {}
     }
     onFileChanged: reload()
@@ -1180,7 +1375,7 @@ Panel {
                 foreground: root.bar.foreground
                 bordered: true
                 active: true
-                tooltipText: "Preview on the displays. Reverts in 10 seconds unless you Keep."
+                tooltipText: "Preview on the displays. Reverts in 20 seconds unless you Keep."
                 onClicked: root.applyDraft()
               }
 

@@ -913,5 +913,52 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
         self.assertFalse(os.path.isdir(self.companion_dir()))
 
 
+class PanelStateFile(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.ctl = load_ctl()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ctl.BACKUP_DIR = self.tmp.name
+        self.ctl.PANEL_STATE = os.path.join(self.tmp.name, "panel.json")
+        self.ctl.REVERT_LUA = os.path.join(self.tmp.name, "revert-monitors.lua")
+        self.ctl.PROFILES_PATH = os.path.join(self.tmp.name, "profiles.json")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_preview_state_is_wanted_and_pending(self):
+        data = self.ctl.write_panel_state(True, True, 123.0, "DP-2")
+        self.assertTrue(data["wanted"])
+        self.assertTrue(data["pendingConfirm"])
+        self.assertEqual(data["deadline"], 123.0)
+        self.assertEqual(data["screen"], "DP-2")
+        loaded = self.ctl.read_panel_state()
+        self.assertTrue(loaded["wanted"])
+        self.assertTrue(loaded["pendingConfirm"])
+        self.assertEqual(loaded["screen"], "DP-2")
+
+    def test_rewrite_preserves_owner_screen(self):
+        self.ctl.write_panel_state(True, True, 10, "eDP-1")
+        data = self.ctl.write_panel_state(True, True, 20)
+        self.assertEqual(data["screen"], "eDP-1")
+        self.assertEqual(data["deadline"], 20)
+
+    def test_confirm_keeps_wanted_and_screen(self):
+        self.ctl.write_panel_state(True, True, 1, "HDMI-A-1")
+        self.ctl.clear_pending_revert()
+        loaded = self.ctl.read_panel_state()
+        self.assertTrue(loaded["wanted"])
+        self.assertFalse(loaded["pendingConfirm"])
+        self.assertEqual(loaded["screen"], "HDMI-A-1")
+
+    def test_clear_drops_wanted(self):
+        self.ctl.write_panel_state(True, True, 1, "DP-2")
+        self.ctl.clear_panel_state()
+        loaded = self.ctl.read_panel_state()
+        self.assertFalse(loaded["wanted"])
+        self.assertFalse(loaded["pendingConfirm"])
+        self.assertEqual(loaded["screen"], "")
+
+
 if __name__ == "__main__":
     unittest.main()

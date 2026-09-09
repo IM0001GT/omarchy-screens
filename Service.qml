@@ -15,6 +15,8 @@ Item {
 
   property var careConfig: Model.normalizeBarCare(null)
   property bool panelWanted: false
+  property bool panelMapped: false
+  property string panelScreen: ""
   property bool pendingConfirm: false
   property int revertLeft: 0
 
@@ -108,6 +110,31 @@ Item {
 
 
   property real revertDeadline: 0
+
+  FileView {
+    path: Quickshell.env("HOME") + "/.local/state/im0001gt.screens/panel.json"
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onLoaded: {
+      try {
+        var data = JSON.parse(text() || "{}")
+        root.panelWanted = !!data.wanted
+        root.pendingConfirm = !!data.pendingConfirm
+        root.panelScreen = String(data.screen || "")
+        if (!root.panelWanted) root.panelMapped = false
+      } catch (e) {}
+    }
+    onFileChanged: reload()
+    onLoadFailed: {
+      if (root.panelWanted || root.pendingConfirm) return
+      root.panelWanted = false
+      root.pendingConfirm = false
+      root.panelScreen = ""
+      root.panelMapped = false
+    }
+    Component.onCompleted: reload()
+  }
 
   FileView {
     path: Quickshell.env("HOME") + "/.local/state/im0001gt.screens/profiles.json"
