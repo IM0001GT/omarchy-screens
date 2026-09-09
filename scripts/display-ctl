@@ -866,12 +866,26 @@ def set_bar_care(key, value):
     return 0
 
 
+def merge_desk_layout(prev, entries):
+    """Keep unplugged desk members so a replug can restore them."""
+    current = [e for e in (entries or []) if isinstance(e, dict) and e.get("id")]
+    previous = [e for e in (prev or []) if isinstance(e, dict) and e.get("id")]
+    if not previous:
+        return current
+    current_ids = {e["id"] for e in current}
+    previous_ids = {e["id"] for e in previous}
+    if current_ids and current_ids < previous_ids:
+        kept = [e for e in previous if e["id"] not in current_ids]
+        return current + kept
+    return current
+
+
 def remember_layout(monitors):
     store = load_store()
     entries = [profile_entry_from_monitor(m) for m in monitors if monitor_identity(m)]
     store["lastLayout"] = entries
     if not any((e.get("mirror") or "") for e in entries):
-        store["deskLayout"] = entries
+        store["deskLayout"] = merge_desk_layout(store.get("deskLayout"), entries)
     save_store(store)
 
 
@@ -1356,11 +1370,22 @@ def recover_internal(quiet=False):
     drm_names = drm_connected_names()
     if not should_recover_internal(drm_names):
         return 0
+    toggle_was_on = internal_toggle_active()
     set_internal_toggle(False)
     data = snapshot()
     monitors = data.get("monitors") or []
     monitors, changed = enable_drm_internals(monitors, drm_names)
     if not monitors:
+        return 0
+    already_on = any(
+        is_internal_panel(m) and m.get("enabled", True) for m in monitors
+    )
+    # The clamshell watcher and Screens both retry this. Reloading Hyprland
+    # eight times after the laptop is already up leaves USB-C DP dongles in
+    # USB-only alt-mode, so the external never comes back on replug.
+    if already_on and not changed and not toggle_was_on:
+        if not quiet:
+            print(json.dumps(data, separators=(",", ":")))
         return 0
     write_monitors_lua(monitors)
     reload_hypr()

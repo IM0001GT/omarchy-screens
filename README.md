@@ -111,7 +111,7 @@ omarchy plugin update im0001gt.screens --yes
 omarchy restart shell
 ```
 
-**1.12.0** is the Omarchy 4.0.3 fix, plus two older holes. The shell no longer lets a third-party service call `barWidgetRegistry.register()`, so spreading workspaces now ships as a generated companion plugin instead of a runtime registration. Unplugging the last external display re-enables the laptop panel, even if Hyprland briefly reports zero outputs. Apply/Keep/Revert keeps the Screens panel open across layout remaps (including scale on another display) until you click outside it. HDR Auto no longer writes the luminance / Display P3 metadata that washed out Chromium and Electron. Pixel Care dims the bar layer window itself (Omarchy 4.0.3 no longer lets a plugin reach `moduleSlots`). Hover still lifts it.
+**1.12.0** is the Omarchy 4.0.3 fix, plus two older holes. The shell no longer lets a third-party service call `barWidgetRegistry.register()`, so spreading workspaces now ships as a generated companion plugin instead of a runtime registration. Unplugging the last external display re-enables the laptop panel, even if Hyprland briefly reports zero outputs, without reloading Hyprland over and over (that was leaving USB-C DP dongles stuck in USB-only mode so the external never came back). Apply/Keep/Revert keeps the Screens panel open across layout remaps (including scale on another display) until you click outside it. HDR Auto no longer writes the luminance / Display P3 metadata that washed out Chromium and Electron. Pixel Care dims the bar layer window itself (Omarchy 4.0.3 no longer lets a plugin reach `moduleSlots`). Hover still lifts it.
 
 ## Uninstall
 

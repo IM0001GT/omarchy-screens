@@ -721,6 +721,22 @@ class LastInternalRecover(unittest.TestCase):
         self.assertEqual(monitors[0]["name"], "eDP-1")
         self.assertTrue(monitors[0]["enabled"])
 
+    def test_recover_skips_reload_when_laptop_already_on(self):
+        writes = []
+        self.ctl.drm_connected_names = lambda: ["eDP-1"]
+        self.ctl.internal_toggle_active = lambda: False
+        self.ctl.set_internal_toggle = lambda disabled, mon=None: None
+        self.ctl.snapshot = lambda: {
+            "monitors": [{"name": "eDP-1", "enabled": True, "identity": "desc:Sharp"}]
+        }
+        self.ctl.write_monitors_lua = lambda monitors, gdk=None: writes.append("write")
+        self.ctl.reload_hypr = lambda: writes.append("reload")
+        self.ctl.remember_layout = lambda monitors: writes.append("remember")
+        self.ctl.run = lambda cmd: writes.append(cmd)
+        rc = self.ctl.recover_internal(quiet=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(writes, [])
+
     def test_monitor_lua_does_not_disable_internal(self):
         line = self.ctl.monitor_lua(
             {
@@ -911,6 +927,54 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
         rc = self.ctl.restore_original()
         self.assertEqual(rc, 0)
         self.assertFalse(os.path.isdir(self.companion_dir()))
+
+
+class DeskLayoutMerge(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.ctl = load_ctl()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ctl.BACKUP_DIR = self.tmp.name
+        self.ctl.PROFILES_PATH = os.path.join(self.tmp.name, "profiles.json")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_unplug_keeps_missing_desk_member(self):
+        laptop = {"id": "desc:Sharp", "enabled": True, "mode": "1920x1200@60", "x": 0, "y": 0, "scale": 1.5, "mirror": ""}
+        desk = {"id": "desc:LG", "enabled": True, "mode": "3840x2160@60", "x": 1280, "y": 0, "scale": 2, "mirror": ""}
+        merged = self.ctl.merge_desk_layout([laptop, desk], [laptop])
+        ids = [e["id"] for e in merged]
+        self.assertEqual(ids, ["desc:Sharp", "desc:LG"])
+        self.assertEqual(next(e for e in merged if e["id"] == "desc:LG")["scale"], 2)
+
+    def test_two_monitor_apply_replaces_desk(self):
+        prev = [{"id": "desc:Sharp", "scale": 1}, {"id": "desc:LG", "scale": 1}]
+        nxt = [{"id": "desc:Sharp", "scale": 1.5}, {"id": "desc:LG", "scale": 2}]
+        merged = self.ctl.merge_desk_layout(prev, nxt)
+        self.assertEqual(merged, nxt)
+
+    def test_remember_layout_does_not_drop_unplugged_desk(self):
+        self.ctl.save_store({
+            "deskLayout": [
+                {"id": "desc:Sharp Corporation 0x14CB", "enabled": True, "mode": "1920x1200@59.95", "x": 0, "y": 0, "scale": 1.5, "mirror": ""},
+                {"id": "desc:LG Electronics LG HDR 4K 0x0006B200", "enabled": True, "mode": "3840x2160@60", "x": 1280, "y": 0, "scale": 2, "mirror": ""},
+            ]
+        })
+        self.ctl.remember_layout([{
+            "name": "eDP-1",
+            "description": "Sharp Corporation 0x14CB",
+            "identity": "desc:Sharp Corporation 0x14CB",
+            "enabled": True,
+            "mode": "1920x1200@59.95",
+            "x": 0,
+            "y": 0,
+            "scale": 1.5,
+        }])
+        store = self.ctl.load_store()
+        ids = [e.get("id") for e in store.get("deskLayout") or []]
+        self.assertIn("desc:LG Electronics LG HDR 4K 0x0006B200", ids)
+        self.assertEqual(len(store.get("lastLayout") or []), 1)
 
 
 class PanelStateFile(unittest.TestCase):
