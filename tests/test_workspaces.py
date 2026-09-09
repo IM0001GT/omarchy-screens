@@ -660,6 +660,136 @@ class Omarchy403WidgetRegistry(unittest.TestCase):
         self.assertNotIn("function finishRegister", text)
 
 
+class LastInternalRecover(unittest.TestCase):
+    def setUp(self):
+        self.ctl = load_ctl()
+
+    def test_internal_names(self):
+        self.assertTrue(self.ctl.is_internal_panel({"name": "eDP-1"}))
+        self.assertTrue(self.ctl.is_internal_panel({"name": "eDP-2"}))
+        self.assertTrue(self.ctl.is_internal_panel({"name": "LVDS-1"}))
+        self.assertTrue(self.ctl.is_internal_panel("DSI-1"))
+        self.assertFalse(self.ctl.is_internal_panel({"name": "HDMI-A-1"}))
+        self.assertFalse(self.ctl.is_internal_panel({"name": "DP-3"}))
+
+    def test_unplug_reenables_disabled_laptop(self):
+        monitors = [
+            {
+                "name": "eDP-1",
+                "enabled": False,
+                "mode": "1920x1200@60",
+                "x": 0,
+                "y": 0,
+                "scale": 1.25,
+            }
+        ]
+        self.assertTrue(self.ctl.recover_last_internal(monitors))
+        self.assertTrue(monitors[0]["enabled"])
+
+    def test_leaves_docked_laptop_off(self):
+        monitors = [
+            {"name": "eDP-1", "enabled": False, "mode": "1920x1200@60"},
+            {"name": "HDMI-A-1", "enabled": True, "mode": "2560x1440@60"},
+        ]
+        self.assertFalse(self.ctl.recover_last_internal(monitors))
+        self.assertFalse(monitors[0]["enabled"])
+        self.assertTrue(monitors[1]["enabled"])
+
+    def test_noop_when_something_is_on(self):
+        monitors = [{"name": "eDP-1", "enabled": True}]
+        self.assertFalse(self.ctl.recover_last_internal(monitors))
+
+    def test_monitor_lua_does_not_disable_internal(self):
+        line = self.ctl.monitor_lua(
+            {
+                "name": "eDP-1",
+                "enabled": False,
+                "mode": "1920x1200@60",
+                "x": 0,
+                "y": 0,
+                "scale": 1.25,
+                "vrr": 0,
+            },
+            set(),
+        )
+        self.assertNotIn("disabled = true", line)
+        self.assertIn("eDP-1", line)
+        self.assertIn("1920x1200@60", line)
+
+    def test_monitor_lua_still_disables_external(self):
+        line = self.ctl.monitor_lua(
+            {"name": "HDMI-A-1", "enabled": False, "description": "LG"},
+            set(),
+        )
+        self.assertIn("disabled = true", line)
+
+
+class HdrAutoChromium(unittest.TestCase):
+    def setUp(self):
+        self.ctl = load_ctl()
+        self.studio = {
+            "name": "DP-1",
+            "description": "Apple Computer Inc StudioDisplay",
+            "enabled": True,
+            "mode": "5120x2880@60",
+            "x": 0,
+            "y": 0,
+            "scale": 2,
+            "vrr": 0,
+            "hdrMode": 1,
+            "hdrCapable": True,
+            "bitdepth": 10,
+            "cm": "dp3",
+            "sdrMinLuminance": 0.005,
+            "sdrMaxLuminance": 200,
+            "sdrBrightness": 1,
+            "minLuminance": 0,
+            "maxLuminance": 604,
+            "maxAvgLuminance": 604,
+            "wideGamut": True,
+        }
+
+    def test_auto_omits_fields_that_wash_out_chromium(self):
+        line = self.ctl.monitor_lua(self.studio, set())
+        self.assertIn("supports_hdr = 1", line)
+        self.assertNotIn("sdr_max_luminance", line)
+        self.assertNotIn('cm = "dp3"', line)
+        self.assertNotIn("max_luminance", line)
+        self.assertNotIn("max_avg_luminance", line)
+        self.assertNotIn("sdr_min_luminance", line)
+
+    def test_always_still_writes_hdr_tune(self):
+        mon = dict(self.studio)
+        mon["hdrMode"] = 2
+        mon["cm"] = "hdredid"
+        line = self.ctl.monitor_lua(mon, set())
+        self.assertIn("supports_hdr = 1", line)
+        self.assertIn("sdr_max_luminance", line)
+        self.assertIn('cm = "hdredid"', line)
+
+    def test_bright_panel_default_sdr_peak_is_not_200(self):
+        self.assertNotEqual(self.ctl.default_sdr_max(self.studio), 200)
+        self.assertGreaterEqual(self.ctl.default_sdr_max(self.studio), 400)
+
+    def test_old_auto_lua_needs_rewrite(self):
+        old = (
+            'hl.monitor({ output = "desc:Apple", mode = "5120x2880@60", '
+            'bitdepth = 10, supports_hdr = 1, cm = "dp3", '
+            "sdr_max_luminance = 200, max_luminance = 604 })\n"
+        )
+        self.assertTrue(self.ctl.monitors_lua_needs_rewrite(old))
+        always = (
+            'hl.monitor({ output = "desc:Apple", supports_hdr = 1, '
+            'cm = "hdredid", sdr_max_luminance = 604 })\n'
+        )
+        self.assertFalse(self.ctl.monitors_lua_needs_rewrite(always))
+        self.assertTrue(
+            self.ctl.monitors_lua_needs_rewrite(
+                'hl.monitor({ output = "eDP-1", disabled = true })\n'
+            )
+        )
+
+
 class WorkspacesCompanionPlugin(unittest.TestCase):
     def setUp(self):
         import tempfile

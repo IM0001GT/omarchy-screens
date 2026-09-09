@@ -491,10 +491,12 @@ function brightnessName(percent) {
 
 function defaultSdrPeak(mon) {
   var avg = Number(mon && mon.maxAvgLuminance)
-  if (isFinite(avg) && avg >= 80 && avg <= 400) return Math.round(avg)
   var peak = Number(mon && mon.maxLuminance)
-  if (isFinite(peak) && peak >= 80 && peak <= 400) return Math.round(peak)
-  return 200
+  var n = 0
+  if (isFinite(avg) && avg >= 80) n = avg
+  else if (isFinite(peak) && peak >= 80) n = peak
+  if (n >= 80) return Math.round(Math.min(n, 1000))
+  return 203
 }
 
 function splitCounts(n, total) {

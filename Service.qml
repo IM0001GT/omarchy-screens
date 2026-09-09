@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Hyprland
 import "Model.js" as Model
 
 Item {
@@ -49,9 +50,18 @@ Item {
     }
   }
 
+  readonly property int hyprMonitorCount: {
+    var vals = Hyprland.monitors && Hyprland.monitors.values
+    return vals ? vals.length : 0
+  }
+
   Component.onCompleted: {
     if (!claimProc.running) claimProc.running = true
     Qt.callLater(root.applyCareVisuals)
+  }
+  onHyprMonitorCountChanged: {
+    if (root.hyprMonitorCount <= 0) return
+    if (!recoverProc.running) recoverProc.running = true
   }
   onCareConfigChanged: root.applyCareVisuals()
   onBarHoveredChanged: root.applyCareVisuals()
@@ -61,6 +71,12 @@ Item {
   Process {
     id: claimProc
     command: [root.ctl, "claim"]
+    stdout: StdioCollector { waitForEnd: true }
+  }
+
+  Process {
+    id: recoverProc
+    command: [root.ctl, "recover-internal"]
     stdout: StdioCollector { waitForEnd: true }
   }
 

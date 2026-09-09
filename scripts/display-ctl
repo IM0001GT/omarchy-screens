@@ -21,6 +21,7 @@ Commands:
   backup-original    snapshot stock files once, before Screens writes them
   restore-original   put those first snapshots back and reload Hyprland
   claim              backup leftover config, take over monitors.lua, restore scale keys, install workspaces plugin
+  recover-internal   re-enable the laptop panel if it is the last remaining output
   conflicts          show hyprmoncfg / HyprMod / other display managers still in control
   bar-care <key> <value>  persist bar dim / hover lift
   scale up|down|N    step focused-display scale
@@ -75,6 +76,9 @@ HYPRLAND_CONF = os.path.expanduser("~/.config/hypr/hyprland.conf")
 HYPRMOD_GUI_LUA = os.path.expanduser("~/.config/hypr/hyprland-gui.lua")
 HYPRMOD_GUI_CONF = os.path.expanduser("~/.config/hypr/hyprland-gui.conf")
 OLED_GUARD_PLUGIN_DIR = os.path.expanduser("~/.config/omarchy/plugins/oled.guard")
+INTERNAL_TOGGLE = os.path.expanduser(
+    "~/.local/state/omarchy/toggles/hypr/internal-monitor-disable.lua"
+)
 SCALE_PRESETS = (1, 1.25, 1.6, 2, 3, 4)
 
 
@@ -686,6 +690,10 @@ def snapshot():
         entry["hdrMode"] = mode
         entry["hdr"] = mode == 2
     merge_drm_connected(monitors)
+    if internal_toggle_active():
+        for entry in monitors:
+            if is_internal_panel(entry):
+                entry["enabled"] = False
     ensure_original_backup()
     store = load_store()
     ids = [m["identity"] for m in monitors if m.get("identity")]
@@ -1228,6 +1236,109 @@ def sanitize_monitor(mon, known_names=None):
 INTERNAL_PANEL_RE = re.compile(r"^(eDP|LVDS|DSI)", re.I)
 
 
+def is_internal_panel(mon):
+    name = mon.get("name") if isinstance(mon, dict) else mon
+    return bool(INTERNAL_PANEL_RE.match(str(name or "")))
+
+
+def recover_last_internal(monitors):
+    """If nothing enabled remains, turn the laptop panel back on."""
+    if not monitors:
+        return False
+    if any(m.get("enabled", True) for m in monitors):
+        return False
+    changed = False
+    for mon in monitors:
+        if is_internal_panel(mon) and not mon.get("enabled", True):
+            mon["enabled"] = True
+            changed = True
+    return changed
+
+
+def default_sdr_max(mon):
+    for key in ("maxAvgLuminance", "maxLuminance"):
+        try:
+            n = int(float(mon.get(key)))
+        except (TypeError, ValueError):
+            continue
+        if n >= 80:
+            return min(n, 1000)
+    try:
+        n = int(float(mon.get("sdrMaxLuminance")))
+        if 40 <= n <= 1000:
+            return n
+    except (TypeError, ValueError):
+        pass
+    return 203
+
+
+def sdr_max_for_write(mon):
+    peak = default_sdr_max(mon)
+    try:
+        n = int(float(mon.get("sdrMaxLuminance")))
+    except (TypeError, ValueError):
+        return peak
+    if n <= 80:
+        return peak
+    if n == 200 and peak >= 400:
+        return peak
+    return clean_int(n, 40, 1000, peak)
+
+
+def internal_toggle_active():
+    return os.path.isfile(INTERNAL_TOGGLE)
+
+
+def set_internal_toggle(disabled, mon=None):
+    if not disabled:
+        if os.path.isfile(INTERNAL_TOGGLE):
+            try:
+                os.unlink(INTERNAL_TOGGLE)
+            except OSError:
+                pass
+        return
+    name = clean_connector((mon or {}).get("name"))
+    if not is_internal_panel(name):
+        return
+    os.makedirs(os.path.dirname(INTERNAL_TOGGLE), exist_ok=True)
+    write_private_file(
+        INTERNAL_TOGGLE,
+        "hl.monitor({ output = %s, disabled = true })\n" % lua_str(name),
+    )
+
+
+def sync_internal_overlay(monitors):
+    internals = [m for m in (monitors or []) if is_internal_panel(m)]
+    if not internals:
+        return
+    want_off = any(not m.get("enabled", True) for m in internals)
+    set_internal_toggle(want_off, internals[0])
+
+
+def monitors_lua_needs_rewrite(text):
+    blob = text or ""
+    if re.search(r'output\s*=\s*"(?:eDP|LVDS|DSI)[^"]*"\s*,\s*disabled\s*=\s*true', blob, re.I):
+        return True
+    if "sdr_max_luminance" in blob and "supports_hdr" in blob:
+        if 'cm = "hdr"' not in blob and 'cm = "hdredid"' not in blob:
+            return True
+    return False
+
+
+def recover_internal(quiet=False):
+    data = snapshot()
+    monitors = data.get("monitors") or []
+    if not recover_last_internal(monitors):
+        return 0
+    set_internal_toggle(False)
+    write_monitors_lua(monitors)
+    reload_hypr()
+    remember_layout(monitors)
+    if not quiet:
+        print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
+
+
 def output_ref(mon, used_desc):
     name = clean_connector(mon.get("name"))
     # omarchy-hyprland-monitor-clamshell only reads the internal panel's rule
@@ -1244,7 +1355,10 @@ def output_ref(mon, used_desc):
 
 def monitor_lua(mon, used_desc):
     name = output_ref(mon, used_desc)
-    if not mon.get("enabled", True):
+    # Named `disabled = true` for the laptop panel beats the catch-all fallback
+    # after the last external is unplugged. Omarchy's overlay toggle is what
+    # actually turns the internal panel off; recover can then lift it.
+    if not mon.get("enabled", True) and not is_internal_panel(mon):
         return "hl.monitor({ output = %s, disabled = true })" % lua_str(name)
     fields = [
         "output = %s" % lua_str(name),
@@ -1259,20 +1373,20 @@ def monitor_lua(mon, used_desc):
     fields.append("vrr = %d" % int(mon.get("vrr") or 0))
     mode = hdr_mode(mon)
     cm = clean_cm(mon.get("cm"))
-    if mode in (1, 2):
+    if mode == 1:
         fields.append("bitdepth = %d" % hypr_wire_bitdepth(mon.get("bitdepth")))
         fields.append("supports_hdr = 1")
-        if mode == 2:
-            if cm not in ("hdr", "hdredid"):
-                cm = "hdredid"
-            fields.append("cm = %s" % lua_str(cm))
-        elif cm and cm not in ("srgb", "auto"):
-            fields.append("cm = %s" % lua_str(cm))
+    elif mode == 2:
+        fields.append("bitdepth = %d" % hypr_wire_bitdepth(mon.get("bitdepth")))
+        fields.append("supports_hdr = 1")
+        if cm not in ("hdr", "hdredid"):
+            cm = "hdredid"
+        fields.append("cm = %s" % lua_str(cm))
         sdr_min = mon.get("sdrMinLuminance")
         if sdr_min is None:
             sdr_min = 0.005
         fields.append("sdr_min_luminance = %s" % format_float(sdr_min))
-        fields.append("sdr_max_luminance = %d" % clean_int(mon.get("sdrMaxLuminance"), 40, 1000, 200))
+        fields.append("sdr_max_luminance = %d" % sdr_max_for_write(mon))
         sdr_bright = mon.get("sdrBrightness")
         if sdr_bright is None:
             sdr_bright = 1.0
@@ -2632,13 +2746,21 @@ def claim_monitors(force=False):
     store = load_store()
     conflicts = detect_conflicts()
     leftover = leftover_outside_managed(existing)
-    should_write = force or leftover or not looks_managed(existing) or not store.get("claimedMonitors")
+    should_write = (
+        force
+        or leftover
+        or not looks_managed(existing)
+        or not store.get("claimedMonitors")
+        or monitors_lua_needs_rewrite(existing)
+    )
     wrote = False
     if should_write and not conflicts.get("blocking"):
         data = snapshot()
         monitors = data.get("monitors") or []
         if monitors:
+            recover_last_internal(monitors)
             write_monitors_lua(monitors)
+            sync_internal_overlay(monitors)
             wrote = True
         store = load_store()
         store["claimedMonitors"] = True
@@ -2646,6 +2768,7 @@ def claim_monitors(force=False):
     elif not conflicts.get("blocking"):
         store["claimedMonitors"] = True
         save_store(store)
+        recover_internal(quiet=True)
     if wrote or bindings_changed:
         reload_hypr()
     return {
@@ -2740,6 +2863,7 @@ def apply(payload, gdk=None, preview=False):
     if preview:
         stash_revert_lua(prev)
     write_monitors_lua(monitors, gdk=gdk)
+    sync_internal_overlay(monitors)
     reload_hypr()
     max_vrr = 0
     for mon in monitors:
@@ -3543,6 +3667,8 @@ def main(argv):
     if cmd == "claim":
         print(json.dumps(claim_monitors(), separators=(",", ":")))
         return 0
+    if cmd == "recover-internal":
+        return recover_internal()
     if cmd == "conflicts":
         action = argv[1] if len(argv) > 1 else ""
         if action in ("remove", "uninstall"):

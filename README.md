@@ -63,12 +63,12 @@ If [HyprMod](https://github.com/BlueManCZ/hyprmod) is managing displays, its `hy
 - **Super+/** and **Super+Alt+/** step the focused display's scale when those keys still belong to stock Display scaling. If you already bound them to something else, Screens asks before taking them (or offers Super+Ctrl+/ instead)
 - Brightness follows the selected output (internal backlight or DDC). It hides when that output has no backlight. A short label (Night owl, Golden hour, and so on) shows in the panel header while you drag the slider
 - Text size uses Omarchy's 9–20 px stops and applies to the shell, GTK, and terminals
-- Laptop built-in panels are written as `eDP-1` / `LVDS` / `DSI` so Omarchy's clamshell helper keeps your scale instead of forcing 2
+- Laptop built-in panels are written as `eDP-1` / `LVDS` / `DSI` so Omarchy's clamshell helper keeps your scale instead of forcing 2. Turning the laptop panel off uses Omarchy's overlay toggle, not a named `disabled = true` in `monitors.lua`, so unplugging the last external display brings the built-in panel back
 - Labels use Hyprland's model string
 
 **HDR and VRR**
 
-- **HDR**: **Off**, **Auto**, or **Always**. Auto keeps the desktop in SDR and only switches to HDR for fullscreen games and video (`cm_auto_hdr`). Always leaves PQ on all the time and can wash out HDR-ready LCDs
+- **HDR**: **Off**, **Auto**, or **Always**. Auto keeps the desktop in SDR (no `sdr_max_luminance` / Display P3 metadata that makes Chromium and Electron look washed out) and only switches to HDR for fullscreen games and video (`cm_auto_hdr`). Always leaves PQ on all the time and can wash out HDR-ready LCDs
 - **Tune** (Auto or Always): 8-bit or 10-bit (Hyprland's real output depths), nine colour presets, wide-colour EDID override, SDR brightness/saturation/transfer, black floor, and SDR peak. Live scanout format is shown, not invented bit depths
 - Color space **Display** uses this panel's EDID primaries. **Wide** is BT.2020. HDR-ready LCDs that are not full wide-gamut should stay on Display
 - HDR and VRR disable themselves when that panel cannot do them
@@ -111,7 +111,7 @@ omarchy plugin update im0001gt.screens --yes
 omarchy restart shell
 ```
 
-**1.12.0** is the Omarchy 4.0.3 fix. The shell no longer lets a third-party service call `barWidgetRegistry.register()`, so spreading workspaces now ships as a generated companion plugin instead of a runtime registration. Pixel Care still dims only what the scoped bar API exposes; it cannot reach other plugins' widgets.
+**1.12.0** is the Omarchy 4.0.3 fix, plus two older holes. The shell no longer lets a third-party service call `barWidgetRegistry.register()`, so spreading workspaces now ships as a generated companion plugin instead of a runtime registration. Unplugging the last external display re-enables the laptop panel. HDR Auto no longer writes the luminance / Display P3 metadata that washed out Chromium and Electron. Pixel Care still dims only what the scoped bar API exposes; it cannot reach other plugins' widgets.
 
 ## Uninstall
 
