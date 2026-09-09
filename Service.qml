@@ -1,20 +1,24 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Hyprland
 import "Model.js" as Model
 
 Item {
   id: root
-  property var barWidgetRegistry: null
   property var manifest: null
   property var shell: null
-  property var component: null
   readonly property string ctl:
     Quickshell.env("HOME") + "/.config/omarchy/plugins/im0001gt.screens/scripts/display-ctl"
   readonly property string carePath:
     Quickshell.env("HOME") + "/.local/state/im0001gt.screens/bar-care.json"
 
   property var careConfig: Model.normalizeBarCare(null)
+  property bool panelWanted: false
+  property bool panelMapped: false
+  property string panelScreen: ""
+  property bool pendingConfirm: false
+  property int revertLeft: 0
 
   readonly property var bar: shell && shell.bar ? shell.bar : null
   readonly property bool barHovered: bar ? !!bar.barHovered : false
@@ -32,31 +36,32 @@ Item {
   }
 
   function applyCareVisuals() {
-    var bar = root.bar
-    if (!bar) return
-    var slots = bar.moduleSlots || []
-    var on = root.careEnabled && !root.barHidden
-    var i, slot, target
-    for (i = 0; i < slots.length; i++) {
-      slot = slots[i]
-      if (!slot) continue
-      target = 1
-      if (on) {
-        target = Model.barOpacityFor(root.careConfig, {
-          hovered: root.barHovered,
-          barHidden: false
-        })
-      }
-      try { slot.opacity = target } catch (e) {}
-    }
+    var host = Model.findHostBar(root)
+    if (!host && root.bar && root.bar.moduleSlots) host = root.bar
+    Model.applyBarCare(host, root.careConfig, {
+      hovered: root.barHovered,
+      barHidden: root.barHidden
+    })
+  }
+
+  readonly property int hyprMonitorCount: {
+    var vals = Hyprland.monitors && Hyprland.monitors.values
+    return vals ? vals.length : 0
+  }
+  property int recoverTries: 0
+
+  function requestRecover() {
+    root.recoverTries = 0
+    recoverRetry.restart()
+    if (!recoverProc.running) recoverProc.running = true
   }
 
   Component.onCompleted: {
-    registerWidget()
     if (!claimProc.running) claimProc.running = true
     Qt.callLater(root.applyCareVisuals)
+    Qt.callLater(root.requestRecover)
   }
-  onBarWidgetRegistryChanged: registerWidget()
+  onHyprMonitorCountChanged: root.requestRecover()
   onCareConfigChanged: root.applyCareVisuals()
   onBarHoveredChanged: root.applyCareVisuals()
   onBarHiddenChanged: root.applyCareVisuals()
@@ -66,6 +71,26 @@ Item {
     id: claimProc
     command: [root.ctl, "claim"]
     stdout: StdioCollector { waitForEnd: true }
+  }
+
+  Process {
+    id: recoverProc
+    command: [root.ctl, "recover-internal"]
+    stdout: StdioCollector { waitForEnd: true }
+  }
+
+  Timer {
+    id: recoverRetry
+    interval: 800
+    repeat: true
+    onTriggered: {
+      root.recoverTries += 1
+      if (root.recoverTries >= 8) {
+        running = false
+        return
+      }
+      if (!recoverProc.running) recoverProc.running = true
+    }
   }
 
   FileView {
@@ -82,14 +107,34 @@ Item {
     Component.onCompleted: reload()
   }
 
-  Timer {
-    interval: 400
-    running: root.careEnabled
-    repeat: true
-    onTriggered: root.applyCareVisuals()
-  }
+
 
   property real revertDeadline: 0
+
+  FileView {
+    path: Quickshell.env("HOME") + "/.local/state/im0001gt.screens/panel.json"
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onLoaded: {
+      try {
+        var data = JSON.parse(text() || "{}")
+        root.panelWanted = !!data.wanted
+        root.pendingConfirm = !!data.pendingConfirm
+        root.panelScreen = String(data.screen || "")
+        if (!root.panelWanted) root.panelMapped = false
+      } catch (e) {}
+    }
+    onFileChanged: reload()
+    onLoadFailed: {
+      if (root.panelWanted || root.pendingConfirm) return
+      root.panelWanted = false
+      root.pendingConfirm = false
+      root.panelScreen = ""
+      root.panelMapped = false
+    }
+    Component.onCompleted: reload()
+  }
 
   FileView {
     path: Quickshell.env("HOME") + "/.local/state/im0001gt.screens/profiles.json"
@@ -123,33 +168,5 @@ Item {
       if (Date.now() / 1000 < root.revertDeadline) return
       if (!revertWatchProc.running) revertWatchProc.running = true
     }
-  }
-
-  function registerWidget() {
-    if (!root.barWidgetRegistry) return
-    var url = Qt.resolvedUrl("Workspaces.qml")
-    var comp = Qt.createComponent(url, Component.PreferSynchronous)
-    if (comp.status === Component.Loading) {
-      comp.statusChanged.connect(function() { root.finishRegister(comp) })
-      return
-    }
-    root.finishRegister(comp)
-  }
-
-  function finishRegister(comp) {
-    if (!comp || comp.status !== Component.Ready) {
-      console.warn("im0001gt.screens: workspaces widget failed to load"
-        + (comp ? (": " + comp.errorString()) : ""))
-      return
-    }
-    root.component = comp
-    root.barWidgetRegistry.register("im0001gt.screens.workspaces", comp, {
-      displayName: "Screens workspaces",
-      description: "Per-display workspaces. Right-click to name, pick an icon, or set Tile / Scroll / Float.",
-      category: "Compositor",
-      allowMultiple: false,
-      pluginId: "im0001gt.screens",
-      source: "plugin"
-    })
   }
 }

@@ -457,6 +457,25 @@ function clampBrightness(value) {
   return Math.max(1, Math.min(100, Math.round(n)))
 }
 
+// Match omarchy-toggle-nightlight: 4000 on, 6500 off, below 6000 counts as night.
+var NIGHTLIGHT_MIN = 1500
+var NIGHTLIGHT_MAX = 6500
+var NIGHTLIGHT_ON = 4000
+var NIGHTLIGHT_OFF = 6500
+var NIGHTLIGHT_IDENTITY = 6000
+
+function clampNightlight(value) {
+  var n = Math.round(Number(value))
+  if (!isFinite(n)) return NIGHTLIGHT_ON
+  if (n < NIGHTLIGHT_MIN) return NIGHTLIGHT_MIN
+  if (n > NIGHTLIGHT_MAX) return NIGHTLIGHT_MAX
+  return n
+}
+
+function nightlightIsOn(temp) {
+  return temp !== null && temp !== undefined && Number(temp) < NIGHTLIGHT_IDENTITY
+}
+
 function lastDisplayQuip(index) {
   var lines = [
     "Nice try",
@@ -491,10 +510,12 @@ function brightnessName(percent) {
 
 function defaultSdrPeak(mon) {
   var avg = Number(mon && mon.maxAvgLuminance)
-  if (isFinite(avg) && avg >= 80 && avg <= 400) return Math.round(avg)
   var peak = Number(mon && mon.maxLuminance)
-  if (isFinite(peak) && peak >= 80 && peak <= 400) return Math.round(peak)
-  return 200
+  var n = 0
+  if (isFinite(avg) && avg >= 80) n = avg
+  else if (isFinite(peak) && peak >= 80) n = peak
+  if (n >= 80) return Math.round(Math.min(n, 1000))
+  return 203
 }
 
 function splitCounts(n, total) {
@@ -668,6 +689,59 @@ function barOpacityFor(care, state) {
   return opacity
 }
 
+function findHostBar(item) {
+  var node = item
+  for (var i = 0; i < 24 && node; i++) {
+    if (node.moduleSlots)
+      return node
+    node = node.parent
+  }
+  return null
+}
+
+function applyBarCare(bar, care, state) {
+  if (!bar || !bar.moduleSlots)
+    return false
+  var slots = bar.moduleSlots
+  var hovered = !!(state && state.hovered) || !!bar.barHovered
+  var hidden = !!(state && state.barHidden) || !!bar.barHidden
+  var opacity = barOpacityFor(care, { hovered: hovered, barHidden: hidden })
+  var i
+  for (i = 0; i < slots.length; i++) {
+    if (!slots[i]) continue
+    try { slots[i].opacity = opacity } catch (e) {}
+  }
+  return true
+}
+
+function windowTreeHovered(item, depth) {
+  if (!item || depth > 24) return false
+  if (item.hovered === true) return true
+  var list = item.data
+  if (!list || !list.length) return false
+  var i
+  for (i = 0; i < list.length; i++) {
+    if (windowTreeHovered(list[i], (depth || 0) + 1)) return true
+  }
+  return false
+}
+
+function applyBarCareToWindow(win, care, state) {
+  if (!win || !win.contentItem)
+    return false
+  var st = state || {}
+  var hovered = Object.prototype.hasOwnProperty.call(st, "hovered")
+    ? !!st.hovered
+    : windowTreeHovered(win.contentItem, 0)
+  var hidden = !!st.barHidden
+  var opacity = barOpacityFor(care, { hovered: hovered, barHidden: hidden })
+  var cur = Number(win.contentItem.opacity)
+  if (isFinite(cur) && Math.abs(cur - opacity) < 0.001)
+    return true
+  try { win.contentItem.opacity = opacity } catch (e) { return false }
+  return true
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     clone: clone,
@@ -689,6 +763,13 @@ if (typeof module !== "undefined") {
     reflowAfterResize: reflowAfterResize,
     scanoutLabel: scanoutLabel,
     clampBrightness: clampBrightness,
+    clampNightlight: clampNightlight,
+    nightlightIsOn: nightlightIsOn,
+    NIGHTLIGHT_MIN: NIGHTLIGHT_MIN,
+    NIGHTLIGHT_MAX: NIGHTLIGHT_MAX,
+    NIGHTLIGHT_ON: NIGHTLIGHT_ON,
+    NIGHTLIGHT_OFF: NIGHTLIGHT_OFF,
+    NIGHTLIGHT_IDENTITY: NIGHTLIGHT_IDENTITY,
     brightnessName: brightnessName,
     lastDisplayQuip: lastDisplayQuip,
     splitCounts: splitCounts,
@@ -706,6 +787,10 @@ if (typeof module !== "undefined") {
     layoutLabel: layoutLabel,
     clampBarDim: clampBarDim,
     normalizeBarCare: normalizeBarCare,
-    barOpacityFor: barOpacityFor
+    barOpacityFor: barOpacityFor,
+    findHostBar: findHostBar,
+    applyBarCare: applyBarCare,
+    windowTreeHovered: windowTreeHovered,
+    applyBarCareToWindow: applyBarCareToWindow
   }
 }

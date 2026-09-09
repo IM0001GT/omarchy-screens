@@ -3,6 +3,7 @@ import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
+import Quickshell.Hyprland
 import qs.Ui
 import qs.Commons
 import "Model.js" as Model
@@ -51,12 +52,20 @@ Panel {
   property bool hdrTuning: false
   property bool barCareOpen: false
   property var barCare: Model.normalizeBarCare(null)
+  onBarCareChanged: root.applyCareVisuals()
   property bool oledGuard: false
   property bool careDimDragging: false
+  property bool allMonitorsBrightness: false
   property int brightnessPercent: 0
   property int pendingBrightnessPercent: 0
   property bool brightnessSetQueued: false
   property bool brightnessAvailable: false
+  property var brightnessTargets: []
+  property int brightnessQueueIndex: 0
+  property int nightlightTemp: 4000
+  property int pendingNightlightTemp: 4000
+  property bool nightlightEnabled: false
+  property bool nightlightSetQueued: false
   property int textSizePreviewIndex: -1
   property bool reflowingText: false
   property bool lastDisplayBounce: false
@@ -70,7 +79,9 @@ Panel {
   property bool layoutMenuOpen: false
   property bool layoutDirty: false
   property bool pendingConfirm: false
-  property int revertLeft: 10
+  onPendingConfirmChanged: if (root.careService) root.careService.pendingConfirm = root.pendingConfirm
+  property int revertLeft: 20
+  onRevertLeftChanged: if (root.careService) root.careService.revertLeft = root.revertLeft
   property var liveMonitors: []
   property int liveTextPx: 12
   readonly property var textSizeStops: [9, 10, 11, 12, 14, 16, 20]
@@ -162,6 +173,11 @@ Panel {
   }
   readonly property string carePath:
     Quickshell.env("HOME") + "/.local/state/im0001gt.screens/bar-care.json"
+  readonly property string panelStatePath:
+    Quickshell.env("HOME") + "/.local/state/im0001gt.screens/panel.json"
+  property bool stickyPanel: false
+  property string panelOwnerScreen: ""
+  property int resumeTries: 0
   readonly property var identifyScreen: {
     var name = selected ? selected.name : ""
     var screens = Quickshell.screens
@@ -174,11 +190,17 @@ Panel {
 
   function refresh() {
     if (root.layoutDirty || root.pendingConfirm) {
-      if (root.opened) root.refreshBrightness()
+      if (root.opened) {
+        root.refreshBrightness()
+        root.refreshNightlight()
+      }
       return
     }
     if (!stateProc.running) stateProc.running = true
-    if (root.opened) root.refreshBrightness()
+    if (root.opened) {
+      root.refreshBrightness()
+      root.refreshNightlight()
+    }
   }
 
   function brightnessMonitor() {
@@ -198,24 +220,91 @@ Panel {
     if (!brightnessProc.running) brightnessProc.running = true
   }
 
+  function brightnessNames() {
+    var names = []
+    var i, m, name
+    if (root.allMonitorsBrightness) {
+      for (i = 0; i < root.monitors.length; i++) {
+        m = root.monitors[i]
+        name = m && m.name ? String(m.name) : ""
+        if (name && m.enabled !== false) names.push(name)
+      }
+    } else {
+      name = root.brightnessMonitor()
+      if (name) names.push(name)
+    }
+    return names
+  }
+
+  function pumpBrightness() {
+    if (root.brightnessQueueIndex >= root.brightnessTargets.length) return
+    var name = root.brightnessTargets[root.brightnessQueueIndex]
+    root.brightnessQueueIndex += 1
+    setBrightnessProc.command = [
+      "omarchy-brightness-display", "--no-osd", "--monitor", name,
+      root.pendingBrightnessPercent + "%"
+    ]
+    setBrightnessProc.running = true
+  }
+
   function setBrightness(value) {
     var percent = Model.clampBrightness(value)
+    var names = root.brightnessNames()
     root.brightnessPercent = percent
     root.pendingBrightnessPercent = percent
-    var name = root.brightnessMonitor()
-    if (!name) return
+    if (!names.length) return
     if (setBrightnessProc.running) {
       root.brightnessSetQueued = true
       return
     }
     root.brightnessSetQueued = false
-    setBrightnessProc.command = ["omarchy-brightness-display", "--no-osd", "--monitor", name, percent + "%"]
-    setBrightnessProc.running = true
+    root.brightnessTargets = names
+    root.brightnessQueueIndex = 0
+    root.pumpBrightness()
   }
 
   function previewBrightness(value) {
     root.brightnessPercent = Model.clampBrightness(value)
     brightnessDebounce.restart()
+  }
+
+  function refreshNightlight() {
+    if (setNightlightProc.running) return
+    if (nightlightSlider && nightlightSlider.dragging) return
+    if (!nightlightProbeProc.running) nightlightProbeProc.running = true
+  }
+
+  function setNightlight(value) {
+    var temp = Model.clampNightlight(value)
+    root.nightlightTemp = temp
+    root.pendingNightlightTemp = temp
+    root.nightlightEnabled = Model.nightlightIsOn(temp)
+    if (setNightlightProc.running) {
+      root.nightlightSetQueued = true
+      return
+    }
+    root.nightlightSetQueued = false
+    setNightlightProc.command = ["bash", "-lc",
+      "pgrep -x hyprsunset >/dev/null || { setsid uwsm-app -- hyprsunset >/dev/null 2>&1 & sleep 1; }; " +
+      "hyprctl hyprsunset temperature " + temp + " >/dev/null 2>&1; " +
+      "omarchy-shell -q nightlight refresh >/dev/null 2>&1 || true"
+    ]
+    setNightlightProc.running = true
+  }
+
+  function previewNightlight(value) {
+    root.nightlightTemp = Model.clampNightlight(value)
+    root.nightlightEnabled = Model.nightlightIsOn(root.nightlightTemp)
+    nightlightDebounce.restart()
+  }
+
+  function setNightlightEnabled(enable) {
+    if (enable) {
+      var target = Model.nightlightIsOn(root.nightlightTemp) ? root.nightlightTemp : 4000
+      root.setNightlight(target)
+      return
+    }
+    root.setNightlight(6500)
   }
 
   function nearestTextStop(px) {
@@ -368,11 +457,148 @@ Panel {
     root.applying = true
     if (preview) {
       root.pendingConfirm = true
-      root.revertLeft = 10
+      root.revertLeft = 20
       revertTick.restart()
+      root.stickyPanel = true
+      root.claimPanelOwner()
+      root.writePanelState(true, true, Date.now() / 1000 + 20)
+      root.armDismissGuard()
+      root.startResumeRetry()
       if (!root.opened) root.open()
     }
     applyProc.running = true
+  }
+
+  function claimPanelOwner() {
+    var name = root.barScreenName
+    if (!name) return
+    root.panelOwnerScreen = name
+    if (root.careService) root.careService.panelScreen = name
+  }
+
+  function armDismissGuard() {
+    dismissGuard.restart()
+  }
+
+  function startResumeRetry() {
+    root.resumeTries = 0
+    if (!resumeRetry.running) resumeRetry.restart()
+    Qt.callLater(root.forceShowPanel)
+  }
+
+  function shouldHoldPanel() {
+    return root.applying || dismissGuard.running
+  }
+
+  function isPanelOwner() {
+    var owner = ""
+    if (root.careService && root.careService.panelScreen)
+      owner = String(root.careService.panelScreen)
+    if (!owner) owner = root.panelOwnerScreen
+    if (!owner || owner === root.barScreenName) return true
+    var screens = Quickshell.screens
+    var i
+    for (i = 0; i < (screens ? screens.length : 0); i++) {
+      if (String(screens[i].name) === owner) return false
+    }
+    return true
+  }
+
+  function open() {
+    root.stickyPanel = true
+    root.claimPanelOwner()
+    if (root.careService) {
+      root.careService.panelWanted = true
+      if (root.isPanelOwner()) root.careService.panelMapped = true
+    }
+    root.controller.show()
+  }
+
+  function close() {
+    // Scale/layout apply remaps layer surfaces. KeyboardPanel's other-output
+    // dismiss overlay then sees a synthetic press and would wipe Keep/Revert.
+    if (root.shouldHoldPanel()) {
+      root.stickyPanel = true
+      root.armDismissGuard()
+      Qt.callLater(root.forceShowPanel)
+      return
+    }
+    root.stickyPanel = false
+    if (root.careService) {
+      root.careService.panelWanted = false
+      root.careService.panelMapped = false
+      root.careService.panelScreen = ""
+    }
+    root.writePanelState(false, false, 0)
+    root.controller.hide()
+  }
+
+  function writePanelState(wanted, pending, deadline) {
+    if (!panelStateFile) return
+    panelStateFile.setText(JSON.stringify({
+      wanted: !!wanted,
+      pendingConfirm: !!pending,
+      deadline: Number(deadline) || 0,
+      screen: wanted ? (root.panelOwnerScreen || root.barScreenName) : ""
+    }) + "\n")
+  }
+
+  function applyPanelState(data) {
+    if (!data) return
+    var wanted = !!data.wanted
+    var pending = !!data.pendingConfirm
+    if (!wanted && root.shouldHoldPanel()) return
+    var screen = String(data.screen || "")
+    root.stickyPanel = wanted
+    if (wanted && screen) root.panelOwnerScreen = screen
+    if (root.careService) {
+      root.careService.panelWanted = wanted
+      root.careService.pendingConfirm = pending
+      if (wanted && screen) root.careService.panelScreen = screen
+      if (!wanted) {
+        root.careService.panelMapped = false
+        root.careService.panelScreen = ""
+      }
+    }
+    if (pending) {
+      root.pendingConfirm = true
+      var left = Math.ceil(Number(data.deadline || 0) - Date.now() / 1000)
+      if (left < 1) left = 1
+      if (left > 30) left = 30
+      root.revertLeft = left
+      if (!revertTick.running) revertTick.restart()
+    }
+    if (wanted) root.startResumeRetry()
+  }
+
+  function forceShowPanel() {
+    if (!root.stickyPanel) return
+    var win = root.barWindow()
+    if (!win || !win.screen) return
+    if (root.isPanelOwner()) {
+      if (!root.opened) root.controller.show()
+      return
+    }
+    var ownerMapped = root.careService && root.careService.panelMapped
+    if (root.resumeTries >= 2 && !ownerMapped) {
+      if (!root.opened) root.controller.show()
+      return
+    }
+    if (root.opened) root.controller.hide()
+  }
+
+  function resumePanel() {
+    root.forceShowPanel()
+  }
+
+  function remountPanel() {
+    if (!root.stickyPanel && !root.pendingConfirm) return
+    root.stickyPanel = true
+    if (root.careService) root.careService.panelWanted = true
+    root.armDismissGuard()
+    if (!root.isPanelOwner()) return
+    if (root.opened) root.controller.hide()
+    Qt.callLater(root.forceShowPanel)
   }
 
   function applyDraft() {
@@ -385,6 +611,7 @@ Panel {
     root.pendingConfirm = false
     root.layoutDirty = false
     root.captureLive(root.monitors)
+    root.writePanelState(true, false, 0)
     keepProc.command = [root.ctl, "confirm"]
     if (!keepProc.running) keepProc.running = true
   }
@@ -397,6 +624,7 @@ Panel {
     if (revertProc.running) return
     revertProc.command = [root.ctl, "revert"]
     root.applying = true
+    root.armDismissGuard()
     revertProc.running = true
   }
 
@@ -664,6 +892,16 @@ Panel {
     root.conflictDismissed = true
   }
 
+  readonly property bool hyprmoncfgConflict: {
+    var id = root.conflict && root.conflict.id ? String(root.conflict.id) : ""
+    return id === "crmne.hyprmoncfg" || id === "display-managers" || id === "hyprmoncfg"
+  }
+
+  function runConflictAction(action) {
+    conflictActionProc.command = [root.ctl, "conflicts", action]
+    if (!conflictActionProc.running) conflictActionProc.running = true
+  }
+
   function setScaleKeys(action) {
     root.runStore(["scale-keys", action])
   }
@@ -706,7 +944,51 @@ Panel {
     root.layoutMenuOpen = true
   }
 
+  property var careHover: null
+  readonly property var careWindow: (typeof button !== "undefined" && button && button.QsWindow)
+    ? button.QsWindow.window
+    : (root.QsWindow ? root.QsWindow.window : null)
+  onCareWindowChanged: root.applyCareVisuals()
+
+  function hostBar() {
+    var host = Model.findHostBar(root)
+    if (host) return host
+    if (root.bar && root.bar.moduleSlots) return root.bar
+    return null
+  }
+
+  function barWindow() {
+    if (typeof button !== "undefined" && button && button.QsWindow && button.QsWindow.window)
+      return button.QsWindow.window
+    if (root.QsWindow && root.QsWindow.window)
+      return root.QsWindow.window
+    return null
+  }
+
+  function ensureCareHover() {
+    var win = root.barWindow()
+    if (!win || !win.contentItem) return null
+    if (root.careHover) return root.careHover
+    try {
+      root.careHover = Qt.createQmlObject("import QtQuick; HoverHandler { }", win.contentItem)
+      root.careHover.hoveredChanged.connect(function() { root.applyCareVisuals() })
+    } catch (e) {
+      root.careHover = null
+    }
+    return root.careHover
+  }
+
+  function applyCareVisuals() {
+    var win = root.barWindow()
+    var hover = root.ensureCareHover()
+    var hovered = !!(hover && hover.hovered)
+    if (Model.applyBarCareToWindow(win, root.barCare, { hovered: hovered }))
+      return
+    Model.applyBarCare(root.hostBar(), root.barCare, { hovered: hovered })
+  }
+
   function pushCareToService(next) {
+    root.applyCareVisuals()
     if (!root.careService) return
     root.careService.careConfig = next
     if (typeof root.careService.applyCareVisuals === "function")
@@ -768,24 +1050,85 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  Component.onCompleted: refresh()
+  Component.onCompleted: {
+    refresh()
+    root.applyCareVisuals()
+    if (root.careService && root.careService.pendingConfirm) {
+      root.pendingConfirm = true
+      root.revertLeft = root.careService.revertLeft || 20
+      revertTick.restart()
+    }
+    if (root.careService && root.careService.panelWanted) {
+      root.stickyPanel = true
+      root.panelOwnerScreen = root.careService.panelScreen || root.panelOwnerScreen
+      root.startResumeRetry()
+    }
+  }
+  Component.onDestruction: {
+    if (root.careHover) {
+      try { root.careHover.destroy() } catch (e) {}
+      root.careHover = null
+    }
+    var win = root.barWindow()
+    if (win && win.contentItem) win.contentItem.opacity = 1
+  }
   onOpenedChanged: {
-    if (!opened) {
-      root.detectNote = ""
-      root.detectPending = false
-      root.hdrTuning = false
-      root.barCareOpen = false
-      if (root.pendingConfirm) root.revertLayout()
-      else if (root.layoutDirty) root.undoDraft()
+    if (opened) {
+      root.stickyPanel = true
+      if (root.careService) {
+        root.careService.panelWanted = true
+        if (root.isPanelOwner()) root.careService.panelMapped = true
+      }
+      root.userPicked = false
+      root.lastDisplayBounce = false
+      root.lastDisplayQuip = ""
+      refresh()
       return
     }
-    root.userPicked = false
-    root.lastDisplayBounce = false
-    root.lastDisplayQuip = ""
-    refresh()
+    if (root.careService && root.careService.panelScreen === root.barScreenName)
+      root.careService.panelMapped = false
+    if ((root.shouldHoldPanel() || root.stickyPanel) && root.isPanelOwner()) {
+      Qt.callLater(root.forceShowPanel)
+      return
+    }
+    if (root.stickyPanel) return
+    root.detectNote = ""
+    root.detectPending = false
+    root.hdrTuning = false
+    root.barCareOpen = false
+    if (root.pendingConfirm) root.revertLayout()
+    else if (root.layoutDirty) root.undoDraft()
   }
 
   onSelectedIndexChanged: if (root.opened) root.refreshBrightness()
+
+  readonly property int screenCount: Quickshell.screens ? Quickshell.screens.length : 0
+  onScreenCountChanged: {
+    if (root.stickyPanel || root.pendingConfirm) {
+      root.armDismissGuard()
+      root.startResumeRetry()
+      Qt.callLater(root.remountPanel)
+    }
+  }
+
+  readonly property string monitorFingerprint: {
+    var vals = Hyprland.monitors && Hyprland.monitors.values
+    var parts = []
+    var i, mon
+    for (i = 0; i < (vals ? vals.length : 0); i++) {
+      mon = vals[i]
+      parts.push(String(mon.name || "") + ":" + String(mon.scale || "") + ":" + String(mon.transform || ""))
+    }
+    return parts.join("|")
+  }
+  onMonitorFingerprintChanged: {
+    if (root.stickyPanel || root.pendingConfirm) {
+      var remapOwner = root.opened && root.isPanelOwner()
+      root.armDismissGuard()
+      root.startResumeRetry()
+      if (remapOwner) Qt.callLater(root.remountPanel)
+    }
+  }
 
   IpcHandler {
     enabled: root.isFocusedBar
@@ -832,6 +1175,26 @@ Panel {
   }
 
   Timer {
+    id: dismissGuard
+    interval: 2500
+  }
+
+  Timer {
+    id: resumeRetry
+    interval: 200
+    repeat: true
+    onTriggered: {
+      root.resumeTries += 1
+      if (!root.stickyPanel || root.resumeTries >= 15
+          || (root.opened && root.isPanelOwner())) {
+        running = false
+        return
+      }
+      root.forceShowPanel()
+    }
+  }
+
+  Timer {
     id: revertTick
     interval: 1000
     repeat: true
@@ -867,6 +1230,8 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        if (root.stickyPanel || root.pendingConfirm)
+          root.armDismissGuard()
         root.applying = false
         try { root.adopt(JSON.parse(text)) }
         catch (e) { root.refresh() }
@@ -880,6 +1245,8 @@ Panel {
           root.pendingIdentify = false
           root.identify()
         }
+        if (root.stickyPanel || root.pendingConfirm)
+          root.startResumeRetry()
       }
     }
     onExited: function(code) {
@@ -942,13 +1309,81 @@ Panel {
     Component.onCompleted: reload()
   }
 
+  FileView {
+    id: panelStateFile
+    path: root.panelStatePath
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onLoaded: {
+      try { root.applyPanelState(JSON.parse(text() || "{}")) }
+      catch (e) {}
+    }
+    onFileChanged: reload()
+    Component.onCompleted: reload()
+  }
+
+
+
+  Process {
+    id: conflictActionProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try { root.adopt(JSON.parse(text)) }
+        catch (e) { root.refresh() }
+        if (!(root.conflict && root.conflict.blocking))
+          root.conflictDismissed = true
+      }
+    }
+  }
+
   Process {
     id: setBrightnessProc
     stdout: StdioCollector { waitForEnd: true }
     onRunningChanged: {
       if (running) return
-      if (root.brightnessSetQueued) root.setBrightness(root.pendingBrightnessPercent)
+      if (root.brightnessSetQueued) {
+        root.setBrightness(root.pendingBrightnessPercent)
+        return
+      }
+      if (root.brightnessQueueIndex < root.brightnessTargets.length)
+        root.pumpBrightness()
     }
+  }
+
+  Process {
+    id: nightlightProbeProc
+    command: ["omarchy-toggle-nightlight", "--status"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (nightlightSlider && nightlightSlider.dragging) return
+        try {
+          var data = JSON.parse(text || "{}")
+          var t = data.temperature
+          if (t === null || t === undefined || t === "") return
+          root.nightlightTemp = Model.clampNightlight(t)
+          root.nightlightEnabled = Model.nightlightIsOn(root.nightlightTemp)
+        } catch (e) {}
+      }
+    }
+  }
+
+  Process {
+    id: setNightlightProc
+    stdout: StdioCollector { waitForEnd: true }
+    onRunningChanged: {
+      if (running) return
+      if (root.nightlightSetQueued) root.setNightlight(root.pendingNightlightTemp)
+    }
+  }
+
+  Timer {
+    id: nightlightDebounce
+    interval: 120
+    repeat: false
+    onTriggered: root.setNightlight(root.nightlightTemp)
   }
 
   Process {
@@ -1035,14 +1470,46 @@ Panel {
               wrapMode: Text.WordWrap
               text: (root.conflict && root.conflict.message)
                 ? root.conflict.message
-                : "Another display tool is still managing your screens. Screens will not disable it for you."
+                : "Another display tool is still managing your screens."
               color: root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
             }
 
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+              visible: root.hyprmoncfgConflict
+
+              Button {
+                visible: !!(root.conflict && (root.conflict.canUnmanage || root.conflict.unmanaged))
+                width: (parent.width - parent.spacing) / (root.conflict && root.conflict.canRemove ? 2 : 1)
+                text: (root.conflict && root.conflict.blocking) ? "Keep unmanaged" : "Keep it"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                tooltipText: (root.conflict && root.conflict.blocking)
+                  ? "Run hyprmoncfg unmanage so Screens can take over. The hyprmoncfg plugin can stay installed."
+                  : "Leave hyprmoncfg installed. It is not managing Hyprland."
+                onClicked: root.runConflictAction((root.conflict && root.conflict.blocking) ? "unmanage" : "keep")
+              }
+
+              Button {
+                visible: !!(root.conflict && root.conflict.canRemove)
+                width: (parent.width - parent.spacing) / (root.conflict && (root.conflict.canUnmanage || root.conflict.unmanaged) ? 2 : 1)
+                text: "Remove hyprmoncfg"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                tooltipText: "Unmanage, then remove the crmne.hyprmoncfg plugin. The AUR package is left unless you drop it yourself."
+                onClicked: root.runConflictAction("remove")
+              }
+            }
+
             Button {
-              text: "Got it"
+              text: root.hyprmoncfgConflict ? "Later" : "Got it"
               fontSize: Style.font.caption
               fontFamily: root.bar.fontFamily
               foreground: root.bar.foreground
@@ -1082,7 +1549,7 @@ Panel {
                 foreground: root.bar.foreground
                 bordered: true
                 active: true
-                tooltipText: "Preview on the displays. Reverts in 10 seconds unless you Keep."
+                tooltipText: "Preview on the displays. Reverts in 20 seconds unless you Keep."
                 onClicked: root.applyDraft()
               }
 
@@ -1954,6 +2421,76 @@ Panel {
                 onReleased: function(v) {
                   brightnessDebounce.stop()
                   root.setBrightness(v)
+                }
+              }
+
+              Toggle {
+                visible: root.enabledCount > 1
+                width: parent.width
+                label: "All monitors"
+                description: "Set the same brightness on every connected display"
+                checked: root.allMonitorsBrightness
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                onClicked: root.allMonitorsBrightness = !root.allMonitorsBrightness
+              }
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Item {
+                width: parent.width
+                implicitHeight: Math.max(nightlightHeader.implicitHeight, nightlightRow.implicitHeight)
+
+                PanelSectionHeader {
+                  id: nightlightHeader
+                  text: "NIGHT LIGHT"
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Row {
+                  id: nightlightRow
+                  spacing: Style.space(8)
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  Text {
+                    text: root.nightlightEnabled
+                      ? (Math.round(nightlightSlider.dragging ? nightlightSlider.liveValue : root.nightlightTemp) + "K")
+                      : "OFF"
+                    color: Qt.darker(root.bar.foreground, 1.4)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  ToggleSwitch {
+                    checked: root.nightlightEnabled
+                    foreground: root.bar.foreground
+                    onToggled: root.setNightlightEnabled(!root.nightlightEnabled)
+                  }
+                }
+              }
+
+              PanelSlider {
+                id: nightlightSlider
+                width: parent.width
+                bar: root.bar
+                minimum: 1500
+                maximum: 6500
+                step: 50
+                value: root.nightlightTemp
+                integer: true
+                onMoved: function(v) { root.previewNightlight(v) }
+                onReleased: function(v) {
+                  nightlightDebounce.stop()
+                  root.setNightlight(v)
                 }
               }
             }

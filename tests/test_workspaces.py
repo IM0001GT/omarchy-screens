@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import json
 import os
 import unittest
 from importlib.machinery import SourceFileLoader
@@ -200,6 +201,8 @@ class StockBackups(unittest.TestCase):
         self.ctl.SHELL_JSON = os.path.join(self.tmp, "omarchy", "shell.json")
         self.ctl.LAYOUTS_DIR = os.path.join(self.tmp, "layouts")
         self.ctl.BRIGHTNESS_LINK = os.path.join(self.tmp, "bin", "omarchy-brightness-display")
+        self.ctl.PLUGIN_DIR = os.path.join(self.tmp, "plugins", "im0001gt.screens")
+        os.makedirs(self.ctl.PLUGIN_DIR, exist_ok=True)
         os.makedirs(os.path.join(self.tmp, "hypr"), exist_ok=True)
         os.makedirs(os.path.join(self.tmp, "omarchy"), exist_ok=True)
         os.makedirs(os.path.join(self.tmp, "layouts"), exist_ok=True)
@@ -238,6 +241,11 @@ class StockBackups(unittest.TestCase):
         self.assertNotIn("BEGIN im0001gt.screens", bindings)
         with open(self.ctl.SHELL_JSON, encoding="utf-8") as fh:
             self.assertIn("omarchy.workspaces", fh.read())
+        live_companion = os.path.join(
+            os.path.expanduser("~"),
+            ".config/omarchy/plugins/im0001gt.screens.workspaces",
+        )
+        self.assertNotEqual(self.ctl.workspaces_plugin_dir(), live_companion)
 
     def test_bindings_backup_strips_managed_block(self):
         with open(self.ctl.BINDINGS_LUA, "w", encoding="utf-8") as fh:
@@ -318,7 +326,7 @@ class ConflictMessages(unittest.TestCase):
     def setUp(self):
         self.ctl = load_ctl()
 
-    def test_blocking_tells_user_to_remove_it(self):
+    def test_blocking_offers_unmanage_or_remove(self):
         msg = self.ctl.conflict_message({
             "plugin": True,
             "enabled": True,
@@ -326,10 +334,10 @@ class ConflictMessages(unittest.TestCase):
             "package": False,
             "blocking": True,
         })
+        self.assertIn("hyprmoncfg unmanage", msg)
         self.assertIn("crmne.hyprmoncfg", msg)
-        self.assertIn("omarchy plugin remove", msg)
-        self.assertIn("yield", msg)
-        self.assertIn("will not disable it for you", msg)
+        self.assertIn("wait", msg)
+        self.assertIn("until you pick", msg)
         self.assertNotIn("system" + "ctl", msg)
 
     def test_leftover_plugin_does_not_claim_to_yield(self):
@@ -340,11 +348,12 @@ class ConflictMessages(unittest.TestCase):
             "package": False,
             "blocking": False,
         })
-        self.assertIn("crmne.hyprmoncfg", msg)
-        self.assertNotIn("yield", msg)
-        self.assertIn("will not disable it for you", msg)
+        self.assertIn("not managing", msg)
+        self.assertNotIn("wait until you hand", msg)
+        self.assertIn("leave it unmanaged", msg)
 
     def test_public_conflict_includes_leftover_plugin_dir(self):
+        self.ctl.load_store = lambda: {"hyprmoncfgChoiceSeen": False}
         info = {
             "id": "crmne.hyprmoncfg",
             "name": "hyprmoncfg",
@@ -483,6 +492,61 @@ class HyprModDetect(unittest.TestCase):
         self.assertTrue(info["blocking"])
         self.assertEqual(info["outputs"], ["DP-1"])
 
+    def test_unmanaged_status_is_not_blocking(self):
+        result = type("Result", (), {
+            "returncode": 0,
+            "stdout": '{"daemon":{"running":true,"unmanaged":true}}',
+        })()
+        self.ctl.run = lambda *args, **kwargs: result
+        self.ctl.process_named = lambda name: True
+        self.ctl.user_unit_wanted = lambda unit: True
+        self.ctl.plugin_enabled = lambda plugin_id: True
+        self.ctl.hyprmoncfg_include_active = lambda: False
+        self.ctl.hyprmoncfg_unmanaged_file = lambda: True
+        info = self.ctl.detect_hyprmoncfg()
+        self.assertTrue(info["unmanaged"])
+        self.assertFalse(info["blocking"])
+
+    def test_include_line_is_blocking(self):
+        self.ctl.run = lambda *args, **kwargs: type("Result", (), {
+            "returncode": 1,
+            "stdout": "",
+        })()
+        self.ctl.process_named = lambda name: False
+        self.ctl.user_unit_wanted = lambda unit: False
+        self.ctl.plugin_enabled = lambda plugin_id: False
+        self.ctl.hyprmoncfg_include_active = lambda: True
+        self.ctl.hyprmoncfg_unmanaged_file = lambda: False
+        info = self.ctl.detect_hyprmoncfg()
+        self.assertTrue(info["blocking"])
+        self.assertTrue(info["include"])
+
+    def test_running_managed_daemon_is_detected_from_status(self):
+        result = type("Result", (), {
+            "returncode": 0,
+            "stdout": '{"daemon":{"running":true}}',
+        })()
+        self.ctl.run = lambda *args, **kwargs: result
+        self.assertTrue(self.ctl.hyprmoncfg_management_state())
+
+    def test_choice_seen_hides_leftover(self):
+        import tempfile
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.ctl.BACKUP_DIR = tmp.name
+        self.ctl.PROFILES_PATH = os.path.join(tmp.name, "profiles.json")
+        self.ctl.save_store({"hyprmoncfgChoiceSeen": True})
+        info = {
+            "id": "crmne.hyprmoncfg",
+            "plugin": True,
+            "enabled": False,
+            "daemon": True,
+            "package": True,
+            "blocking": False,
+            "message": "leftover",
+        }
+        self.assertIsNone(self.ctl.public_conflict(info))
+
     def test_merge_mentions_both_managers(self):
         hm = {
             "id": "crmne.hyprmoncfg",
@@ -598,17 +662,24 @@ class BarCare(unittest.TestCase):
 
 
 class ConflictsCli(unittest.TestCase):
-    def test_remove_is_refused(self):
-        import subprocess
-        out = subprocess.run(
-            [CTL, "conflicts", "remove"],
-            capture_output=True,
-            text=True,
-            timeout=8,
-        )
-        self.assertEqual(out.returncode, 2)
-        self.assertIn("does not remove other plugins", out.stderr)
-        self.assertFalse((out.stdout or "").strip())
+    def test_unknown_action_is_refused(self):
+        self.ctl = load_ctl()
+        self.assertEqual(self.ctl.handoff_hyprmoncfg("uninstall"), 2)
+
+    def test_keep_marks_choice_without_shelling_out(self):
+        import tempfile
+        self.ctl = load_ctl()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.ctl.BACKUP_DIR = tmp.name
+        self.ctl.PROFILES_PATH = os.path.join(tmp.name, "profiles.json")
+        self.ctl.snapshot = lambda: {"ok": True}
+        calls = []
+        self.ctl.run = lambda cmd, timeout=4: calls.append(cmd)
+        rc = self.ctl.handoff_hyprmoncfg("keep")
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [])
+        self.assertTrue(self.ctl.load_store().get("hyprmoncfgChoiceSeen"))
 
 
 class MarketplaceHygiene(unittest.TestCase):
@@ -640,6 +711,380 @@ class MarketplaceHygiene(unittest.TestCase):
                     if token in lower:
                         hits.append("%s: %s" % (os.path.relpath(path, ROOT), token))
         self.assertEqual(hits, [])
+
+
+class Omarchy403WidgetRegistry(unittest.TestCase):
+    def test_service_does_not_call_registry_register(self):
+        path = os.path.join(ROOT, "Service.qml")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertNotIn("barWidgetRegistry.register", text)
+        self.assertNotIn("function registerWidget", text)
+        self.assertNotIn("function finishRegister", text)
+
+
+class LastInternalRecover(unittest.TestCase):
+    def setUp(self):
+        self.ctl = load_ctl()
+
+    def test_internal_names(self):
+        self.assertTrue(self.ctl.is_internal_panel({"name": "eDP-1"}))
+        self.assertTrue(self.ctl.is_internal_panel({"name": "eDP-2"}))
+        self.assertTrue(self.ctl.is_internal_panel({"name": "LVDS-1"}))
+        self.assertTrue(self.ctl.is_internal_panel("DSI-1"))
+        self.assertFalse(self.ctl.is_internal_panel({"name": "HDMI-A-1"}))
+        self.assertFalse(self.ctl.is_internal_panel({"name": "DP-3"}))
+
+    def test_unplug_reenables_disabled_laptop(self):
+        monitors = [
+            {
+                "name": "eDP-1",
+                "enabled": False,
+                "mode": "1920x1200@60",
+                "x": 0,
+                "y": 0,
+                "scale": 1.25,
+            }
+        ]
+        self.assertTrue(self.ctl.recover_last_internal(monitors))
+        self.assertTrue(monitors[0]["enabled"])
+
+    def test_leaves_docked_laptop_off(self):
+        monitors = [
+            {"name": "eDP-1", "enabled": False, "mode": "1920x1200@60"},
+            {"name": "HDMI-A-1", "enabled": True, "mode": "2560x1440@60"},
+        ]
+        self.assertFalse(self.ctl.recover_last_internal(monitors))
+        self.assertFalse(monitors[0]["enabled"])
+        self.assertTrue(monitors[1]["enabled"])
+
+    def test_noop_when_something_is_on(self):
+        monitors = [{"name": "eDP-1", "enabled": True}]
+        self.assertFalse(self.ctl.recover_last_internal(monitors))
+
+    def test_recover_when_drm_only_has_laptop(self):
+        self.assertTrue(self.ctl.should_recover_internal(["eDP-1"]))
+        self.assertFalse(self.ctl.should_recover_internal(["eDP-1", "DP-3"]))
+        self.assertFalse(self.ctl.should_recover_internal(["DP-3"]))
+        self.assertFalse(self.ctl.should_recover_internal([]))
+
+    def test_recover_despite_hypr_ghost_external(self):
+        monitors = [
+            {"name": "eDP-1", "enabled": False, "mode": "1920x1200@60"},
+            {"name": "DP-3", "enabled": True, "mode": "2560x1440@60"},
+        ]
+        monitors, changed = self.ctl.enable_drm_internals(monitors, ["eDP-1"])
+        self.assertTrue(changed)
+        self.assertTrue(next(m for m in monitors if m["name"] == "eDP-1")["enabled"])
+
+    def test_recover_stubs_edp_when_hypr_empty(self):
+        monitors, changed = self.ctl.enable_drm_internals([], ["eDP-1"])
+        self.assertTrue(changed)
+        self.assertEqual(len(monitors), 1)
+        self.assertEqual(monitors[0]["name"], "eDP-1")
+        self.assertTrue(monitors[0]["enabled"])
+
+    def test_recover_skips_reload_when_laptop_already_on(self):
+        writes = []
+        self.ctl.drm_connected_names = lambda: ["eDP-1"]
+        self.ctl.internal_toggle_active = lambda: False
+        self.ctl.set_internal_toggle = lambda disabled, mon=None: None
+        self.ctl.snapshot = lambda: {
+            "monitors": [{"name": "eDP-1", "enabled": True, "identity": "desc:Sharp"}]
+        }
+        self.ctl.write_monitors_lua = lambda monitors, gdk=None: writes.append("write")
+        self.ctl.reload_hypr = lambda: writes.append("reload")
+        self.ctl.remember_layout = lambda monitors: writes.append("remember")
+        self.ctl.run = lambda cmd: writes.append(cmd)
+        rc = self.ctl.recover_internal(quiet=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(writes, [])
+
+    def test_monitor_lua_does_not_disable_internal(self):
+        line = self.ctl.monitor_lua(
+            {
+                "name": "eDP-1",
+                "enabled": False,
+                "mode": "1920x1200@60",
+                "x": 0,
+                "y": 0,
+                "scale": 1.25,
+                "vrr": 0,
+            },
+            set(),
+        )
+        self.assertNotIn("disabled = true", line)
+        self.assertIn("eDP-1", line)
+        self.assertIn("1920x1200@60", line)
+
+    def test_monitor_lua_still_disables_external(self):
+        line = self.ctl.monitor_lua(
+            {"name": "HDMI-A-1", "enabled": False, "description": "LG"},
+            set(),
+        )
+        self.assertIn("disabled = true", line)
+
+
+class HdrAutoChromium(unittest.TestCase):
+    def setUp(self):
+        self.ctl = load_ctl()
+        self.studio = {
+            "name": "DP-1",
+            "description": "Apple Computer Inc StudioDisplay",
+            "enabled": True,
+            "mode": "5120x2880@60",
+            "x": 0,
+            "y": 0,
+            "scale": 2,
+            "vrr": 0,
+            "hdrMode": 1,
+            "hdrCapable": True,
+            "bitdepth": 10,
+            "cm": "dp3",
+            "sdrMinLuminance": 0.005,
+            "sdrMaxLuminance": 200,
+            "sdrBrightness": 1,
+            "minLuminance": 0,
+            "maxLuminance": 604,
+            "maxAvgLuminance": 604,
+            "wideGamut": True,
+        }
+
+    def test_auto_omits_fields_that_wash_out_chromium(self):
+        line = self.ctl.monitor_lua(self.studio, set())
+        self.assertIn("supports_hdr = 1", line)
+        self.assertNotIn("sdr_max_luminance", line)
+        self.assertNotIn('cm = "dp3"', line)
+        self.assertNotIn("max_luminance", line)
+        self.assertNotIn("max_avg_luminance", line)
+        self.assertNotIn("sdr_min_luminance", line)
+
+    def test_always_still_writes_hdr_tune(self):
+        mon = dict(self.studio)
+        mon["hdrMode"] = 2
+        mon["cm"] = "hdredid"
+        line = self.ctl.monitor_lua(mon, set())
+        self.assertIn("supports_hdr = 1", line)
+        self.assertIn("sdr_max_luminance", line)
+        self.assertIn('cm = "hdredid"', line)
+
+    def test_bright_panel_default_sdr_peak_is_not_200(self):
+        self.assertNotEqual(self.ctl.default_sdr_max(self.studio), 200)
+        self.assertGreaterEqual(self.ctl.default_sdr_max(self.studio), 400)
+
+    def test_old_auto_lua_needs_rewrite(self):
+        old = (
+            'hl.monitor({ output = "desc:Apple", mode = "5120x2880@60", '
+            'bitdepth = 10, supports_hdr = 1, cm = "dp3", '
+            "sdr_max_luminance = 200, max_luminance = 604 })\n"
+        )
+        self.assertTrue(self.ctl.monitors_lua_needs_rewrite(old))
+        always = (
+            'hl.monitor({ output = "desc:Apple", supports_hdr = 1, '
+            'cm = "hdredid", sdr_max_luminance = 604 })\n'
+        )
+        self.assertFalse(self.ctl.monitors_lua_needs_rewrite(always))
+        self.assertTrue(
+            self.ctl.monitors_lua_needs_rewrite(
+                'hl.monitor({ output = "eDP-1", disabled = true })\n'
+            )
+        )
+
+
+class WorkspacesCompanionPlugin(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.ctl = load_ctl()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.plugins = os.path.join(self.tmp.name, "plugins")
+        self.src = os.path.join(self.plugins, "im0001gt.screens")
+        os.makedirs(self.src, exist_ok=True)
+        for name in ("Workspaces.qml", "WorkspaceLayoutMenu.qml", "Model.js", "LICENSE"):
+            with open(os.path.join(ROOT, name), encoding="utf-8") as fh:
+                text = fh.read()
+            with open(os.path.join(self.src, name), "w", encoding="utf-8") as fh:
+                fh.write(text)
+        with open(os.path.join(self.src, "manifest.json"), "w", encoding="utf-8") as fh:
+            json.dump({
+                "schemaVersion": 1,
+                "id": "im0001gt.screens",
+                "name": "Screens",
+                "version": "1.12.0",
+                "kinds": ["bar-widget", "service"],
+                "entryPoints": {"barWidget": "Screens.qml", "service": "Service.qml"},
+            }, fh)
+        self.ctl.PLUGIN_DIR = self.src
+        self.ctl.OUR_WS_WIDGET = "im0001gt.screens.workspaces"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def companion_dir(self):
+        return os.path.join(self.plugins, "im0001gt.screens.workspaces")
+
+    def test_install_writes_valid_companion_manifest(self):
+        changed = self.ctl.install_workspaces_plugin()
+        self.assertTrue(changed)
+        dest = self.companion_dir()
+        manifest_path = os.path.join(dest, "manifest.json")
+        self.assertTrue(os.path.isfile(manifest_path))
+        with open(manifest_path, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        self.assertEqual(manifest["id"], "im0001gt.screens.workspaces")
+        self.assertEqual(manifest["version"], "1.12.0")
+        self.assertEqual(manifest["kinds"], ["bar-widget"])
+        self.assertEqual(manifest["entryPoints"]["barWidget"], "Workspaces.qml")
+        self.assertEqual(manifest["barWidget"]["displayName"], "Screens workspaces")
+        self.assertEqual(manifest["barWidget"]["category"], "Compositor")
+        self.assertFalse(manifest["barWidget"]["allowMultiple"])
+        self.assertEqual(manifest["barWidget"]["defaultSection"], "left")
+        for name in ("Workspaces.qml", "WorkspaceLayoutMenu.qml", "Model.js", "LICENSE"):
+            self.assertTrue(os.path.isfile(os.path.join(dest, name)), name)
+        self.assertTrue(self.ctl.is_generated_workspaces_plugin(dest))
+
+    def test_install_is_idempotent(self):
+        self.assertTrue(self.ctl.install_workspaces_plugin())
+        self.assertFalse(self.ctl.install_workspaces_plugin())
+
+    def test_install_refreshes_when_source_changes(self):
+        self.ctl.install_workspaces_plugin()
+        with open(os.path.join(self.src, "Workspaces.qml"), "a", encoding="utf-8") as fh:
+            fh.write("\n// touched\n")
+        self.assertTrue(self.ctl.install_workspaces_plugin())
+
+    def test_remove_only_deletes_generated_companion(self):
+        self.ctl.install_workspaces_plugin()
+        dest = self.companion_dir()
+        self.assertTrue(os.path.isdir(dest))
+        self.assertTrue(self.ctl.remove_workspaces_plugin())
+        self.assertFalse(os.path.isdir(dest))
+        os.makedirs(dest, exist_ok=True)
+        with open(os.path.join(dest, "manifest.json"), "w", encoding="utf-8") as fh:
+            json.dump({"id": "im0001gt.screens.workspaces"}, fh)
+        self.assertFalse(self.ctl.remove_workspaces_plugin())
+        self.assertTrue(os.path.isdir(dest))
+
+    def test_restore_original_removes_generated_companion(self):
+        self.ctl.install_workspaces_plugin()
+        orig = os.path.join(self.tmp.name, "originals")
+        os.makedirs(orig, exist_ok=True)
+        with open(os.path.join(orig, "monitors.lua"), "w", encoding="utf-8") as fh:
+            fh.write("hl.monitor({ output = \"eDP-1\" })\n")
+        self.ctl.BACKUP_DIR = os.path.join(self.tmp.name, "state")
+        self.ctl.ORIGINAL_BACKUP = os.path.join(orig, "monitors.lua")
+        os.makedirs(self.ctl.BACKUP_DIR, exist_ok=True)
+        self.ctl.MONITORS_LUA = os.path.join(self.tmp.name, "hypr", "monitors.lua")
+        self.ctl.BINDINGS_LUA = os.path.join(self.tmp.name, "hypr", "bindings.lua")
+        self.ctl.SHELL_JSON = os.path.join(self.tmp.name, "omarchy", "shell.json")
+        self.ctl.LAYOUTS_DIR = os.path.join(self.tmp.name, "layouts")
+        self.ctl.BRIGHTNESS_LINK = os.path.join(self.tmp.name, "bin", "omarchy-brightness-display")
+        os.makedirs(os.path.join(self.tmp.name, "hypr"), exist_ok=True)
+        os.makedirs(os.path.join(self.tmp.name, "omarchy"), exist_ok=True)
+        def originals_dir():
+            return orig
+        self.ctl.originals_dir = originals_dir
+        def load_manifest():
+            return {"files": {"monitors.lua": {"present": True, "name": "monitors.lua"}}}
+        self.ctl.load_originals_manifest = load_manifest
+        self.ctl.reload_hypr = lambda: None
+        rc = self.ctl.restore_original()
+        self.assertEqual(rc, 0)
+        self.assertFalse(os.path.isdir(self.companion_dir()))
+
+
+class DeskLayoutMerge(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.ctl = load_ctl()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ctl.BACKUP_DIR = self.tmp.name
+        self.ctl.PROFILES_PATH = os.path.join(self.tmp.name, "profiles.json")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_unplug_keeps_missing_desk_member(self):
+        laptop = {"id": "desc:Sharp", "enabled": True, "mode": "1920x1200@60", "x": 0, "y": 0, "scale": 1.5, "mirror": ""}
+        desk = {"id": "desc:LG", "enabled": True, "mode": "3840x2160@60", "x": 1280, "y": 0, "scale": 2, "mirror": ""}
+        merged = self.ctl.merge_desk_layout([laptop, desk], [laptop])
+        ids = [e["id"] for e in merged]
+        self.assertEqual(ids, ["desc:Sharp", "desc:LG"])
+        self.assertEqual(next(e for e in merged if e["id"] == "desc:LG")["scale"], 2)
+
+    def test_two_monitor_apply_replaces_desk(self):
+        prev = [{"id": "desc:Sharp", "scale": 1}, {"id": "desc:LG", "scale": 1}]
+        nxt = [{"id": "desc:Sharp", "scale": 1.5}, {"id": "desc:LG", "scale": 2}]
+        merged = self.ctl.merge_desk_layout(prev, nxt)
+        self.assertEqual(merged, nxt)
+
+    def test_remember_layout_does_not_drop_unplugged_desk(self):
+        self.ctl.save_store({
+            "deskLayout": [
+                {"id": "desc:Sharp Corporation 0x14CB", "enabled": True, "mode": "1920x1200@59.95", "x": 0, "y": 0, "scale": 1.5, "mirror": ""},
+                {"id": "desc:LG Electronics LG HDR 4K 0x0006B200", "enabled": True, "mode": "3840x2160@60", "x": 1280, "y": 0, "scale": 2, "mirror": ""},
+            ]
+        })
+        self.ctl.remember_layout([{
+            "name": "eDP-1",
+            "description": "Sharp Corporation 0x14CB",
+            "identity": "desc:Sharp Corporation 0x14CB",
+            "enabled": True,
+            "mode": "1920x1200@59.95",
+            "x": 0,
+            "y": 0,
+            "scale": 1.5,
+        }])
+        store = self.ctl.load_store()
+        ids = [e.get("id") for e in store.get("deskLayout") or []]
+        self.assertIn("desc:LG Electronics LG HDR 4K 0x0006B200", ids)
+        self.assertEqual(len(store.get("lastLayout") or []), 1)
+
+
+class PanelStateFile(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.ctl = load_ctl()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ctl.BACKUP_DIR = self.tmp.name
+        self.ctl.PANEL_STATE = os.path.join(self.tmp.name, "panel.json")
+        self.ctl.REVERT_LUA = os.path.join(self.tmp.name, "revert-monitors.lua")
+        self.ctl.PROFILES_PATH = os.path.join(self.tmp.name, "profiles.json")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_preview_state_is_wanted_and_pending(self):
+        data = self.ctl.write_panel_state(True, True, 123.0, "DP-2")
+        self.assertTrue(data["wanted"])
+        self.assertTrue(data["pendingConfirm"])
+        self.assertEqual(data["deadline"], 123.0)
+        self.assertEqual(data["screen"], "DP-2")
+        loaded = self.ctl.read_panel_state()
+        self.assertTrue(loaded["wanted"])
+        self.assertTrue(loaded["pendingConfirm"])
+        self.assertEqual(loaded["screen"], "DP-2")
+
+    def test_rewrite_preserves_owner_screen(self):
+        self.ctl.write_panel_state(True, True, 10, "eDP-1")
+        data = self.ctl.write_panel_state(True, True, 20)
+        self.assertEqual(data["screen"], "eDP-1")
+        self.assertEqual(data["deadline"], 20)
+
+    def test_confirm_keeps_wanted_and_screen(self):
+        self.ctl.write_panel_state(True, True, 1, "HDMI-A-1")
+        self.ctl.clear_pending_revert()
+        loaded = self.ctl.read_panel_state()
+        self.assertTrue(loaded["wanted"])
+        self.assertFalse(loaded["pendingConfirm"])
+        self.assertEqual(loaded["screen"], "HDMI-A-1")
+
+    def test_clear_drops_wanted(self):
+        self.ctl.write_panel_state(True, True, 1, "DP-2")
+        self.ctl.clear_panel_state()
+        loaded = self.ctl.read_panel_state()
+        self.assertFalse(loaded["wanted"])
+        self.assertFalse(loaded["pendingConfirm"])
+        self.assertEqual(loaded["screen"], "")
 
 
 if __name__ == "__main__":

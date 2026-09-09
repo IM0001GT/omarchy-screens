@@ -34,11 +34,44 @@ assert.ok(Model.barOpacityFor({ enabled: true, dim: 40 }, { hovered: true }) ===
 assert.ok(Model.barOpacityFor({ enabled: true, dim: 40, hoverLift: false }, { hovered: true }) < 1)
 assert.strictEqual(Model.barOpacityFor({ enabled: true, dim: 100 }, {}), 0)
 assert.strictEqual(Model.clampBarDim(140), 100)
+assert.strictEqual(Model.clampNightlight(4000), 4000)
+assert.strictEqual(Model.clampNightlight(80), 1500)
+assert.strictEqual(Model.clampNightlight(9000), 6500)
+assert.ok(Model.nightlightIsOn(4000))
+assert.ok(!Model.nightlightIsOn(6500))
+assert.ok(!Model.nightlightIsOn(6000))
+
+const leaf = { parent: { parent: { moduleSlots: [{ opacity: 1 }, { opacity: 1 }], barHovered: false, barHidden: false, parent: null } } }
+assert.strictEqual(Model.findHostBar(leaf).moduleSlots.length, 2)
+assert.strictEqual(Model.findHostBar({ parent: null }), null)
+assert.strictEqual(Model.findHostBar(null), null)
+const slots = [{ opacity: 1 }, { opacity: 1 }]
+assert.ok(Model.applyBarCare({ moduleSlots: slots, barHovered: false }, { enabled: true, dim: 40, hoverLift: true }))
+assert.ok(slots[0].opacity < 0.7)
+assert.ok(Model.applyBarCare({ moduleSlots: slots, barHovered: true }, { enabled: true, dim: 40, hoverLift: true }))
+assert.strictEqual(slots[0].opacity, 1)
+assert.ok(!Model.applyBarCare({ barHovered: false }, { enabled: true, dim: 40 }))
+assert.ok(!Model.applyBarCare(null, { enabled: true, dim: 40 }))
+
+const content = { opacity: 1, data: [] }
+assert.ok(Model.applyBarCareToWindow({ contentItem: content }, { enabled: true, dim: 85, hoverLift: true }))
+assert.ok(content.opacity < 0.2)
+content.data = [{ hovered: true }]
+assert.ok(Model.applyBarCareToWindow({ contentItem: content }, { enabled: true, dim: 85, hoverLift: true }))
+assert.strictEqual(content.opacity, 1)
+assert.ok(!Model.applyBarCareToWindow(null, { enabled: true, dim: 85 }))
+assert.ok(!Model.applyBarCareToWindow({}, { enabled: true, dim: 85 }))
+const held = { opacity: 0.15, data: [] }
+assert.ok(Model.applyBarCareToWindow({ contentItem: held }, { enabled: true, dim: 85, hoverLift: true }, { hovered: false }))
+assert.strictEqual(held.opacity, 0.15)
 assert.strictEqual(Model.formatScale(1.33), "1.33")
 assert.strictEqual(Model.formatScale(1.5), "1.5")
 assert.ok(Model.scaleIsSharp({ width: 3840, height: 2160 }, 1.25))
 assert.ok(!Model.scaleIsSharp({ width: 1920, height: 1080 }, 1.4))
 assert.ok(Model.hdrDescription({ hdrMode: 2, bitdepth: 10, cm: "hdr" }).indexOf("10-bit") >= 0)
+assert.notStrictEqual(Model.defaultSdrPeak({ maxLuminance: 604, maxAvgLuminance: 604 }), 200)
+assert.ok(Model.defaultSdrPeak({ maxLuminance: 604, maxAvgLuminance: 604 }) >= 400)
+assert.strictEqual(Model.defaultSdrPeak({ maxAvgLuminance: 250 }), 250)
 assert.ok(Model.scanoutLabel({ format: "XBGR2101010" }).indexOf("10-bit") >= 0)
 assert.ok(Model.scanoutLabel({ format: "XBGR16161616F" }).indexOf("16-bit float") >= 0)
 

@@ -20,8 +20,9 @@ Commands:
   idle off|on|notice
   backup-original    snapshot stock files once, before Screens writes them
   restore-original   put those first snapshots back and reload Hyprland
-  claim              backup leftover config, take over monitors.lua, restore scale keys
-  conflicts          show hyprmoncfg / HyprMod / other display managers still in control
+  claim              backup leftover config, take over monitors.lua, restore scale keys, install workspaces plugin
+  recover-internal   re-enable the laptop panel if it is the last remaining output
+  conflicts [check|unmanage|remove|keep]  hyprmoncfg / HyprMod handoff
   bar-care <key> <value>  persist bar dim / hover lift
   scale up|down|N    step focused-display scale
   scale-keys take|skip|alt|set <up> <down>  keep, skip, or change scale keybinds
@@ -46,6 +47,7 @@ CM_PRESETS = ("auto", "srgb", "dcip3", "dp3", "adobe", "wide", "edid", "hdr", "h
 PROFILES_PATH = os.path.join(BACKUP_DIR, "profiles.json")
 ORIGINAL_BACKUP = os.path.join(BACKUP_DIR, "original-monitors.lua")
 WORKSPACES_JSON = os.path.join(BACKUP_DIR, "workspaces.json")
+PANEL_STATE = os.path.join(BACKUP_DIR, "panel.json")
 LAYOUTS_DIR = os.path.expanduser("~/.local/state/omarchy/workspace-layouts")
 SHELL_JSON = os.path.expanduser("~/.config/omarchy/shell.json")
 BRIGHTNESS_LINK = os.path.expanduser("~/.local/bin/omarchy-brightness-display")
@@ -57,17 +59,28 @@ STAMPED_BACKUP_GLOB = "monitors.lua.[0-9]*"
 WORKSPACE_COUNT = 10
 OUR_WS_WIDGET = "im0001gt.screens.workspaces"
 STOCK_WS_WIDGET = "omarchy.workspaces"
+WORKSPACES_PLUGIN_FILES = (
+    "Workspaces.qml",
+    "WorkspaceLayoutMenu.qml",
+    "Model.js",
+    "LICENSE",
+)
+WORKSPACES_PLUGIN_MARKER = "generated-by-im0001gt.screens.json"
 HYPRMONCFG_PLUGIN_ID = "crmne.hyprmoncfg"
 HYPRMONCFG_PLUGIN_DIR = os.path.expanduser(
     "~/.config/omarchy/plugins/%s" % HYPRMONCFG_PLUGIN_ID
 )
 HYPRMONCFG_DAEMON = "hyprmoncfgd"
 HYPRMONCFG_UNIT = HYPRMONCFG_DAEMON + ".service"
+HYPRMONCFG_UNMANAGED = os.path.expanduser("~/.config/hyprmoncfg/unmanaged")
 HYPRLAND_LUA = os.path.expanduser("~/.config/hypr/hyprland.lua")
 HYPRLAND_CONF = os.path.expanduser("~/.config/hypr/hyprland.conf")
 HYPRMOD_GUI_LUA = os.path.expanduser("~/.config/hypr/hyprland-gui.lua")
 HYPRMOD_GUI_CONF = os.path.expanduser("~/.config/hypr/hyprland-gui.conf")
 OLED_GUARD_PLUGIN_DIR = os.path.expanduser("~/.config/omarchy/plugins/oled.guard")
+INTERNAL_TOGGLE = os.path.expanduser(
+    "~/.local/state/omarchy/toggles/hypr/internal-monitor-disable.lua"
+)
 SCALE_PRESETS = (1, 1.25, 1.6, 2, 3, 4)
 
 
@@ -679,6 +692,10 @@ def snapshot():
         entry["hdrMode"] = mode
         entry["hdr"] = mode == 2
     merge_drm_connected(monitors)
+    if internal_toggle_active():
+        for entry in monitors:
+            if is_internal_panel(entry):
+                entry["enabled"] = False
     ensure_original_backup()
     store = load_store()
     ids = [m["identity"] for m in monitors if m.get("identity")]
@@ -765,6 +782,7 @@ def load_store():
         "deskLayout": [],
         "hybridNoticeShown": False,
         "claimedMonitors": False,
+        "hyprmoncfgChoiceSeen": False,
         "manageWorkspaces": False,
         "workspaceLayouts": {},
         "workspacesBarId": "",
@@ -788,6 +806,7 @@ def load_store():
                 store["deskLayout"] = desk_layout
             store["hybridNoticeShown"] = bool(data.get("hybridNoticeShown"))
             store["claimedMonitors"] = bool(data.get("claimedMonitors"))
+            store["hyprmoncfgChoiceSeen"] = bool(data.get("hyprmoncfgChoiceSeen"))
             store["manageWorkspaces"] = bool(data.get("manageWorkspaces"))
             layouts = data.get("workspaceLayouts")
             if isinstance(layouts, dict):
@@ -850,12 +869,26 @@ def set_bar_care(key, value):
     return 0
 
 
+def merge_desk_layout(prev, entries):
+    """Keep unplugged desk members so a replug can restore them."""
+    current = [e for e in (entries or []) if isinstance(e, dict) and e.get("id")]
+    previous = [e for e in (prev or []) if isinstance(e, dict) and e.get("id")]
+    if not previous:
+        return current
+    current_ids = {e["id"] for e in current}
+    previous_ids = {e["id"] for e in previous}
+    if current_ids and current_ids < previous_ids:
+        kept = [e for e in previous if e["id"] not in current_ids]
+        return current + kept
+    return current
+
+
 def remember_layout(monitors):
     store = load_store()
     entries = [profile_entry_from_monitor(m) for m in monitors if monitor_identity(m)]
     store["lastLayout"] = entries
     if not any((e.get("mirror") or "") for e in entries):
-        store["deskLayout"] = entries
+        store["deskLayout"] = merge_desk_layout(store.get("deskLayout"), entries)
     save_store(store)
 
 
@@ -1221,6 +1254,161 @@ def sanitize_monitor(mon, known_names=None):
 INTERNAL_PANEL_RE = re.compile(r"^(eDP|LVDS|DSI)", re.I)
 
 
+def is_internal_panel(mon):
+    name = mon.get("name") if isinstance(mon, dict) else mon
+    return bool(INTERNAL_PANEL_RE.match(str(name or "")))
+
+
+def should_recover_internal(drm_names=None):
+    names = list(drm_names) if drm_names is not None else drm_connected_names()
+    has_internal = any(is_internal_panel(n) for n in names)
+    has_external = any(not is_internal_panel(n) for n in names)
+    return bool(has_internal and not has_external)
+
+
+def enable_drm_internals(monitors, drm_names):
+    """Put every DRM-connected laptop panel in the list and turn it on."""
+    monitors = list(monitors or [])
+    changed = False
+    have = {m.get("name") for m in monitors}
+    for name in drm_names or []:
+        if not is_internal_panel(name):
+            continue
+        if name not in have:
+            stub = stub_monitor(name)
+            stub["enabled"] = True
+            monitors.append(stub)
+            have.add(name)
+            changed = True
+            continue
+        for mon in monitors:
+            if mon.get("name") == name and not mon.get("enabled", True):
+                mon["enabled"] = True
+                changed = True
+    return monitors, changed
+
+
+def recover_last_internal(monitors, drm_names=None):
+    """If nothing enabled remains, turn the laptop panel back on."""
+    names = drm_names
+    if names is None:
+        names = [m.get("name") for m in (monitors or []) if m.get("name")]
+    if not should_recover_internal(names):
+        return False
+    _, changed = enable_drm_internals(monitors, names)
+    return changed
+
+
+def default_sdr_max(mon):
+    for key in ("maxAvgLuminance", "maxLuminance"):
+        try:
+            n = int(float(mon.get(key)))
+        except (TypeError, ValueError):
+            continue
+        if n >= 80:
+            return min(n, 1000)
+    try:
+        n = int(float(mon.get("sdrMaxLuminance")))
+        if 40 <= n <= 1000:
+            return n
+    except (TypeError, ValueError):
+        pass
+    return 203
+
+
+def sdr_max_for_write(mon):
+    peak = default_sdr_max(mon)
+    try:
+        n = int(float(mon.get("sdrMaxLuminance")))
+    except (TypeError, ValueError):
+        return peak
+    if n <= 80:
+        return peak
+    if n == 200 and peak >= 400:
+        return peak
+    return clean_int(n, 40, 1000, peak)
+
+
+def internal_toggle_active():
+    return os.path.isfile(INTERNAL_TOGGLE)
+
+
+def set_internal_toggle(disabled, mon=None):
+    if not disabled:
+        if os.path.isfile(INTERNAL_TOGGLE):
+            try:
+                os.unlink(INTERNAL_TOGGLE)
+            except OSError:
+                pass
+        return
+    name = clean_connector((mon or {}).get("name"))
+    if not is_internal_panel(name):
+        return
+    os.makedirs(os.path.dirname(INTERNAL_TOGGLE), exist_ok=True)
+    write_private_file(
+        INTERNAL_TOGGLE,
+        "hl.monitor({ output = %s, disabled = true })\n" % lua_str(name),
+    )
+
+
+def sync_internal_overlay(monitors):
+    internals = [m for m in (monitors or []) if is_internal_panel(m)]
+    if not internals:
+        return
+    want_off = any(not m.get("enabled", True) for m in internals)
+    set_internal_toggle(want_off, internals[0])
+
+
+def monitors_lua_needs_rewrite(text):
+    blob = text or ""
+    if re.search(r'output\s*=\s*"(?:eDP|LVDS|DSI)[^"]*"\s*,\s*disabled\s*=\s*true', blob, re.I):
+        return True
+    if "sdr_max_luminance" in blob and "supports_hdr" in blob:
+        if 'cm = "hdr"' not in blob and 'cm = "hdredid"' not in blob:
+            return True
+    return False
+
+
+def recover_internal(quiet=False):
+    drm_names = drm_connected_names()
+    if not should_recover_internal(drm_names):
+        return 0
+    toggle_was_on = internal_toggle_active()
+    set_internal_toggle(False)
+    data = snapshot()
+    monitors = data.get("monitors") or []
+    monitors, changed = enable_drm_internals(monitors, drm_names)
+    if not monitors:
+        return 0
+    already_on = any(
+        is_internal_panel(m) and m.get("enabled", True) for m in monitors
+    )
+    # The clamshell watcher and Screens both retry this. Reloading Hyprland
+    # eight times after the laptop is already up leaves USB-C DP dongles in
+    # USB-only alt-mode, so the external never comes back on replug.
+    if already_on and not changed and not toggle_was_on:
+        if not quiet:
+            print(json.dumps(data, separators=(",", ":")))
+        return 0
+    write_monitors_lua(monitors)
+    reload_hypr()
+    for name in drm_names:
+        if not is_internal_panel(name):
+            continue
+        run([
+            "hyprctl",
+            "eval",
+            "hl.monitor({ output = %s, mode = \"preferred\", position = \"auto\", scale = \"auto\" })"
+            % lua_str(name),
+        ])
+    run(["hyprctl", "dispatch", 'hl.dsp.dpms({ action = "enable" })'])
+    run(["omarchy-hyprland-monitor-internal", "recover"])
+    remember_layout(monitors)
+    if not quiet:
+        print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
+
+
 def output_ref(mon, used_desc):
     name = clean_connector(mon.get("name"))
     # omarchy-hyprland-monitor-clamshell only reads the internal panel's rule
@@ -1237,7 +1425,10 @@ def output_ref(mon, used_desc):
 
 def monitor_lua(mon, used_desc):
     name = output_ref(mon, used_desc)
-    if not mon.get("enabled", True):
+    # Named `disabled = true` for the laptop panel beats the catch-all fallback
+    # after the last external is unplugged. Omarchy's overlay toggle is what
+    # actually turns the internal panel off; recover can then lift it.
+    if not mon.get("enabled", True) and not is_internal_panel(mon):
         return "hl.monitor({ output = %s, disabled = true })" % lua_str(name)
     fields = [
         "output = %s" % lua_str(name),
@@ -1252,20 +1443,20 @@ def monitor_lua(mon, used_desc):
     fields.append("vrr = %d" % int(mon.get("vrr") or 0))
     mode = hdr_mode(mon)
     cm = clean_cm(mon.get("cm"))
-    if mode in (1, 2):
+    if mode == 1:
         fields.append("bitdepth = %d" % hypr_wire_bitdepth(mon.get("bitdepth")))
         fields.append("supports_hdr = 1")
-        if mode == 2:
-            if cm not in ("hdr", "hdredid"):
-                cm = "hdredid"
-            fields.append("cm = %s" % lua_str(cm))
-        elif cm and cm not in ("srgb", "auto"):
-            fields.append("cm = %s" % lua_str(cm))
+    elif mode == 2:
+        fields.append("bitdepth = %d" % hypr_wire_bitdepth(mon.get("bitdepth")))
+        fields.append("supports_hdr = 1")
+        if cm not in ("hdr", "hdredid"):
+            cm = "hdredid"
+        fields.append("cm = %s" % lua_str(cm))
         sdr_min = mon.get("sdrMinLuminance")
         if sdr_min is None:
             sdr_min = 0.005
         fields.append("sdr_min_luminance = %s" % format_float(sdr_min))
-        fields.append("sdr_max_luminance = %d" % clean_int(mon.get("sdrMaxLuminance"), 40, 1000, 200))
+        fields.append("sdr_max_luminance = %d" % sdr_max_for_write(mon))
         sdr_bright = mon.get("sdrBrightness")
         if sdr_bright is None:
             sdr_bright = 1.0
@@ -1712,6 +1903,16 @@ if path:
         if os.path.lexists(path):
             os.unlink(path)
         os.symlink(previous, path)
+companion = os.path.join(home, ".config/omarchy/plugins/im0001gt.screens.workspaces")
+marker = os.path.join(companion, "generated-by-im0001gt.screens.json")
+if os.path.isfile(marker):
+    try:
+        with open(marker, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and data.get("generatedBy") == "im0001gt.screens":
+            shutil.rmtree(companion)
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        pass
 print("Restored first-install Hyprland and Omarchy files from", orig)
 PY
 hyprctl reload >/dev/null 2>&1 || true
@@ -1825,6 +2026,8 @@ def restore_original():
         os.symlink(previous, path)
         restored.append(path)
     reload_hypr()
+    if remove_workspaces_plugin():
+        restored.append(workspaces_plugin_dir())
     if not restored:
         print("restore-original: no first-install snapshot at %s" % orig, file=sys.stderr)
         return 2
@@ -1927,32 +2130,52 @@ def plugin_enabled(plugin_id):
     return False
 
 
+def hyprmoncfg_include_active():
+    """True when Hyprland still loads hyprmoncfg's generated monitor file."""
+    needle = re.compile(r"hyprmoncfg-monitors", re.I)
+    if hypr_lua_mode():
+        return bool(needle.search(read_hypr_text(HYPRLAND_LUA)))
+    return bool(needle.search(read_hypr_text(HYPRLAND_CONF)))
+
+
+def hyprmoncfg_unmanaged_file():
+    return os.path.isfile(HYPRMONCFG_UNMANAGED)
+
+
+def hyprmoncfg_management_state():
+    """True when managed, False when unmanaged, None if unknown."""
+    out = run(["hyprmoncfg", "status", "--json"], timeout=8)
+    if not out or out.returncode != 0 or not (out.stdout or "").strip():
+        return None
+    try:
+        payload = json.loads(out.stdout)
+    except json.JSONDecodeError:
+        return None
+    daemon = payload.get("daemon") if isinstance(payload, dict) else None
+    if not isinstance(daemon, dict):
+        return None
+    if daemon.get("unmanaged") is True:
+        return False
+    if daemon.get("running") is True:
+        return True
+    return None
+
+
 _conflict_cache = {"at": 0.0, "info": None}
 
 
 def conflict_message(info):
-    bits = []
-    if info.get("plugin") or info.get("enabled"):
-        bits.append("the crmne.hyprmoncfg plugin")
-    if info.get("daemon"):
-        bits.append("the hyprmoncfgd daemon")
-    if info.get("package") and not bits:
-        bits.append("the hyprmoncfg package")
-    who = " and ".join(bits) if bits else "hyprmoncfg"
     if info.get("blocking"):
-        extra = (
-            "It stays in control of screen settings until you remove it. "
-            "Screens will yield until then, and will not disable it for you. "
-        )
-    else:
-        extra = (
-            "Remove it if you are not using it. Screens will not disable it for you. "
+        return (
+            "hyprmoncfg is currently managing your displays. Screens will wait "
+            "until you hand them off. Keep the plugin and turn off Managed by "
+            "hyprmoncfg (or run hyprmoncfg unmanage), or remove crmne.hyprmoncfg. "
+            "Screens will not do either until you pick."
         )
     return (
-        "Found %s. %s"
-        "Use: omarchy plugin remove crmne.hyprmoncfg — "
-        "and stop hyprmoncfgd yourself if it is still running."
-        % (who, extra)
+        "hyprmoncfg is still installed but is not managing Hyprland. "
+        "You can leave it unmanaged, or remove the plugin if you do not want "
+        "both on the bar."
     )
 
 
@@ -2095,9 +2318,25 @@ def detect_hyprmoncfg():
     daemon_running = process_named(HYPRMONCFG_DAEMON)
     daemon_wanted = user_unit_wanted(HYPRMONCFG_UNIT)
     package = bool(shutil.which(HYPRMONCFG_DAEMON) or shutil.which("hyprmoncfg"))
-    blocking = bool(enabled or daemon_running or daemon_wanted)
-    present = bool(plugin or blocking or package)
-    shown = blocking or plugin
+    include = hyprmoncfg_include_active()
+    status = hyprmoncfg_management_state()
+    unmanaged = status is False or (status is None and hyprmoncfg_unmanaged_file() and not include)
+    if include or status is True:
+        blocking = True
+    elif unmanaged:
+        blocking = False
+    else:
+        blocking = bool(enabled or daemon_running or daemon_wanted)
+    present = bool(plugin or daemon_running or daemon_wanted or package or include)
+    shown = blocking or plugin or daemon_running or daemon_wanted
+    info = {
+        "plugin": plugin,
+        "enabled": enabled,
+        "daemon": daemon_running or daemon_wanted,
+        "package": package,
+        "blocking": blocking,
+        "unmanaged": unmanaged,
+    }
     return {
         "id": HYPRMONCFG_PLUGIN_ID,
         "name": "hyprmoncfg",
@@ -2106,15 +2345,13 @@ def detect_hyprmoncfg():
         "daemon": daemon_running or daemon_wanted,
         "daemonActive": daemon_running,
         "package": package,
+        "unmanaged": unmanaged,
+        "include": include,
         "blocking": blocking,
         "present": present,
-        "message": conflict_message({
-            "plugin": plugin,
-            "enabled": enabled,
-            "daemon": daemon_running or daemon_wanted,
-            "package": package,
-            "blocking": blocking,
-        }) if shown else "",
+        "canUnmanage": bool(shutil.which("hyprmoncfg")),
+        "canRemove": bool(plugin or package),
+        "message": conflict_message(info) if shown else "",
     }
 
 
@@ -2141,7 +2378,10 @@ def detect_hyprmod():
 
 
 def merge_conflicts(hyprmoncfg, hyprmod):
-    show_hm = bool(hyprmoncfg.get("blocking") or hyprmoncfg.get("plugin"))
+    choice_seen = bool(load_store().get("hyprmoncfgChoiceSeen"))
+    show_hm = bool(hyprmoncfg.get("blocking") or (
+        (hyprmoncfg.get("plugin") or hyprmoncfg.get("daemon")) and not choice_seen
+    ))
     show_hy = bool(hyprmod.get("blocking"))
     if show_hm and show_hy:
         msg = " ".join(
@@ -2176,7 +2416,13 @@ def detect_conflicts():
 
 
 def public_conflict(info):
-    if not info or not (info.get("blocking") or info.get("plugin")):
+    if not info:
+        return None
+    blocking = bool(info.get("blocking"))
+    leftover = bool((info.get("plugin") or info.get("daemon")) and not blocking)
+    if leftover and load_store().get("hyprmoncfgChoiceSeen"):
+        return None
+    if not blocking and not leftover:
         return None
     return {
         "id": info.get("id") or "",
@@ -2185,7 +2431,10 @@ def public_conflict(info):
         "enabled": bool(info.get("enabled")),
         "daemon": bool(info.get("daemon")),
         "package": bool(info.get("package")),
-        "blocking": bool(info.get("blocking")),
+        "blocking": blocking,
+        "unmanaged": bool(info.get("unmanaged")),
+        "canUnmanage": bool(info.get("canUnmanage") or shutil.which("hyprmoncfg")),
+        "canRemove": bool(info.get("canRemove") or info.get("plugin") or info.get("package")),
         "present": True,
         "message": info.get("message") or "",
         "outputs": list(info.get("outputs") or []),
@@ -2608,17 +2857,26 @@ def scale_step(requested):
 def claim_monitors(force=False):
     existing = read_text(MONITORS_LUA) if os.path.isfile(MONITORS_LUA) else ""
     ensure_original_backup(existing)
+    install_workspaces_plugin()
     bindings_changed = maybe_install_scale_bindings()
     store = load_store()
     conflicts = detect_conflicts()
     leftover = leftover_outside_managed(existing)
-    should_write = force or leftover or not looks_managed(existing) or not store.get("claimedMonitors")
+    should_write = (
+        force
+        or leftover
+        or not looks_managed(existing)
+        or not store.get("claimedMonitors")
+        or monitors_lua_needs_rewrite(existing)
+    )
     wrote = False
     if should_write and not conflicts.get("blocking"):
         data = snapshot()
         monitors = data.get("monitors") or []
         if monitors:
+            recover_last_internal(monitors)
             write_monitors_lua(monitors)
+            sync_internal_overlay(monitors)
             wrote = True
         store = load_store()
         store["claimedMonitors"] = True
@@ -2626,6 +2884,7 @@ def claim_monitors(force=False):
     elif not conflicts.get("blocking"):
         store["claimedMonitors"] = True
         save_store(store)
+        recover_internal(quiet=True)
     if wrote or bindings_changed:
         reload_hypr()
     return {
@@ -2650,6 +2909,42 @@ def reload_hypr():
     time.sleep(0.15)
 
 
+def read_panel_state():
+    try:
+        with open(PANEL_STATE, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            return {
+                "wanted": bool(data.get("wanted")),
+                "pendingConfirm": bool(data.get("pendingConfirm")),
+                "deadline": float(data.get("deadline") or 0),
+                "screen": str(data.get("screen") or ""),
+            }
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return {"wanted": False, "pendingConfirm": False, "deadline": 0.0, "screen": ""}
+
+
+def write_panel_state(wanted, pending=False, deadline=0, screen=None):
+    prev = read_panel_state()
+    if screen is None:
+        screen = prev.get("screen") or ""
+    if not wanted:
+        screen = ""
+    payload = {
+        "wanted": bool(wanted),
+        "pendingConfirm": bool(pending),
+        "deadline": float(deadline or 0),
+        "screen": str(screen or ""),
+    }
+    write_private_file(PANEL_STATE, json.dumps(payload) + "\n")
+    return payload
+
+
+def clear_panel_state():
+    return write_panel_state(False, False, 0)
+
+
 def stash_revert_lua(prev_text):
     if os.path.isfile(REVERT_LUA) or not prev_text:
         return
@@ -2667,6 +2962,8 @@ def clear_pending_revert():
     if store.get("pendingRevert"):
         store["pendingRevert"] = None
         save_store(store)
+    st = read_panel_state()
+    write_panel_state(st.get("wanted"), False, 0, st.get("screen") or "")
 
 
 def confirm_layout():
@@ -2702,10 +2999,55 @@ def pending_revert_due():
     return deadline > 0 and time.time() >= deadline
 
 
+def mark_hyprmoncfg_choice_seen():
+    store = load_store()
+    store["hyprmoncfgChoiceSeen"] = True
+    save_store(store)
+    clear_conflict_cache()
+
+
+def handoff_hyprmoncfg(mode):
+    """User-picked handoff: unmanage, remove, or keep the leftover install."""
+    action = str(mode or "").strip().lower()
+    if action not in ("unmanage", "remove", "keep"):
+        print("conflicts: unmanage|remove|keep", file=sys.stderr)
+        return 2
+    if action == "keep":
+        mark_hyprmoncfg_choice_seen()
+        print(json.dumps(snapshot(), separators=(",", ":")))
+        return 0
+    if action == "unmanage":
+        if shutil.which("hyprmoncfg"):
+            run(["hyprmoncfg", "unmanage"], timeout=20)
+        mark_hyprmoncfg_choice_seen()
+        info = detect_conflicts()
+        if not info.get("blocking"):
+            claim_monitors(force=True)
+        print(json.dumps(snapshot(), separators=(",", ":")))
+        return 0 if not detect_conflicts().get("blocking") else 1
+    if shutil.which("hyprmoncfg"):
+        run(["hyprmoncfg", "unmanage"], timeout=20)
+    run(["omarchy", "plugin", "remove", HYPRMONCFG_PLUGIN_ID], timeout=30)
+    mark_hyprmoncfg_choice_seen()
+    info = detect_conflicts()
+    if not info.get("blocking"):
+        claim_monitors(force=True)
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0 if not detect_conflicts().get("blocking") else 1
+
+
 def apply(payload, gdk=None, preview=False):
     monitors = payload.get("monitors") if isinstance(payload, dict) else None
     if not isinstance(monitors, list) or not monitors:
         print("apply: expected {\"monitors\": [...]}", file=sys.stderr)
+        return 2
+    conflicts = detect_conflicts()
+    if conflicts.get("blocking"):
+        print(
+            conflicts.get("message")
+            or "another display tool is managing the screens",
+            file=sys.stderr,
+        )
         return 2
     known = {clean_connector(m.get("name")) for m in monitors if clean_connector(m.get("name"))}
     monitors = [sanitize_monitor(m, known) for m in monitors]
@@ -2720,6 +3062,7 @@ def apply(payload, gdk=None, preview=False):
     if preview:
         stash_revert_lua(prev)
     write_monitors_lua(monitors, gdk=gdk)
+    sync_internal_overlay(monitors)
     reload_hypr()
     max_vrr = 0
     for mon in monitors:
@@ -2749,9 +3092,11 @@ def apply(payload, gdk=None, preview=False):
     else:
         write_workspaces_json(False, [], load_store().get("workspaceLayouts") or {})
     if preview:
+        deadline = time.time() + 20
         store = load_store()
-        store["pendingRevert"] = {"deadline": time.time() + 10}
+        store["pendingRevert"] = {"deadline": deadline}
         save_store(store)
+        write_panel_state(True, True, deadline)
     print(json.dumps(snapshot(), separators=(",", ":")))
     return 0
 
@@ -3034,6 +3379,140 @@ def save_shell_json(data):
     os.replace(tmp, SHELL_JSON)
 
 
+def workspaces_plugin_dir():
+    parent = os.path.dirname(PLUGIN_DIR.rstrip(os.sep))
+    return os.path.join(parent, OUR_WS_WIDGET)
+
+
+def screens_plugin_version():
+    path = os.path.join(PLUGIN_DIR, "manifest.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        version = str((data or {}).get("version") or "").strip()
+        if version:
+            return version
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        pass
+    return "1.0.0"
+
+
+def workspaces_plugin_manifest():
+    return {
+        "schemaVersion": 1,
+        "id": OUR_WS_WIDGET,
+        "name": "Screens workspaces",
+        "version": screens_plugin_version(),
+        "author": "IM0001GT",
+        "license": "MIT",
+        "homepage": "https://github.com/IM0001GT/omarchy-screens",
+        "description": (
+            "Per-display workspaces. Right-click to name, pick an icon, "
+            "or set Tile / Scroll / Float."
+        ),
+        "kinds": ["bar-widget"],
+        "entryPoints": {"barWidget": "Workspaces.qml"},
+        "barWidget": {
+            "displayName": "Screens workspaces",
+            "description": (
+                "Per-display workspaces. Right-click to name, pick an icon, "
+                "or set Tile / Scroll / Float."
+            ),
+            "category": "Compositor",
+            "allowMultiple": False,
+            "defaultSection": "left",
+        },
+    }
+
+
+def is_generated_workspaces_plugin(path=None):
+    dest = path or workspaces_plugin_dir()
+    marker = os.path.join(dest, WORKSPACES_PLUGIN_MARKER)
+    if not os.path.isfile(marker):
+        return False
+    try:
+        with open(marker, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return isinstance(data, dict) and data.get("generatedBy") == "im0001gt.screens"
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        return False
+
+
+def read_bytes(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def workspaces_plugin_files():
+    files = {}
+    for name in WORKSPACES_PLUGIN_FILES:
+        data = read_bytes(os.path.join(PLUGIN_DIR, name))
+        if data is not None:
+            files[name] = data
+    files["manifest.json"] = (
+        json.dumps(workspaces_plugin_manifest(), indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    files[WORKSPACES_PLUGIN_MARKER] = (
+        json.dumps({"generatedBy": "im0001gt.screens"}, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    return files
+
+
+def workspaces_plugin_matches(dest, files):
+    if not os.path.isdir(dest):
+        return False
+    try:
+        existing = set(os.listdir(dest))
+    except OSError:
+        return False
+    if existing != set(files):
+        return False
+    for name, data in files.items():
+        if read_bytes(os.path.join(dest, name)) != data:
+            return False
+    return True
+
+
+def install_workspaces_plugin():
+    dest = workspaces_plugin_dir()
+    files = workspaces_plugin_files()
+    if workspaces_plugin_matches(dest, files):
+        return False
+    parent = os.path.dirname(dest)
+    staging = os.path.join(parent, ".%s.staging" % OUR_WS_WIDGET)
+    if os.path.isdir(staging):
+        shutil.rmtree(staging)
+    os.makedirs(staging)
+    for name, data in files.items():
+        with open(os.path.join(staging, name), "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
+    backup = dest + ".old"
+    if os.path.isdir(backup):
+        shutil.rmtree(backup)
+    if os.path.isdir(dest):
+        os.rename(dest, backup)
+    os.rename(staging, dest)
+    if os.path.isdir(backup):
+        shutil.rmtree(backup)
+    return True
+
+
+def remove_workspaces_plugin():
+    dest = workspaces_plugin_dir()
+    if not is_generated_workspaces_plugin(dest):
+        return False
+    shutil.rmtree(dest)
+    return True
+
+
 def swap_bar_workspaces(enable):
     ensure_stock_backups()
     config = load_shell_json()
@@ -3081,6 +3560,7 @@ def set_manage_workspaces(on):
     reload_hypr()
     if on:
         pin_and_save_plan(live)
+        install_workspaces_plugin()
         swap_bar_workspaces(True)
     else:
         write_workspaces_json(False, [], store.get("workspaceLayouts") or {})
@@ -3310,6 +3790,13 @@ def main(argv):
         return restore_original()
     if cmd == "confirm":
         return confirm_layout()
+    if cmd == "panel-state":
+        action = argv[1] if len(argv) > 1 else ""
+        if action in ("open", "wanted"):
+            write_panel_state(True, True, time.time() + 20)
+            return 0
+        clear_panel_state()
+        return 0
     if cmd == "revert":
         return revert_layout()
     if cmd == "revert-if-due":
@@ -3388,25 +3875,21 @@ def main(argv):
     if cmd == "claim":
         print(json.dumps(claim_monitors(), separators=(",", ":")))
         return 0
+    if cmd == "recover-internal":
+        return recover_internal()
     if cmd == "conflicts":
         action = argv[1] if len(argv) > 1 else ""
-        if action in ("remove", "uninstall"):
-            print(
-                "conflicts: Screens does not remove other plugins. "
-                "Remove hyprmoncfg yourself, or open HyprMod and trash "
-                "its per-display monitor rules.",
-                file=sys.stderr,
-            )
-            return 2
+        if action in ("unmanage", "remove", "keep"):
+            return handoff_hyprmoncfg(action)
         info = detect_conflicts()
         payload = public_conflict(info) or {"present": False, "blocking": False}
         if action in ("--check", "check"):
-            if info.get("blocking") or info.get("plugin"):
+            if payload.get("present"):
                 print(json.dumps(payload, separators=(",", ":")))
                 return 1
             return 0
         print(json.dumps(payload, separators=(",", ":")))
-        return 1 if (info.get("blocking") or info.get("plugin")) else 0
+        return 1 if payload.get("present") else 0
     if cmd == "bar-care":
         return set_bar_care(
             argv[1] if len(argv) > 1 else "",

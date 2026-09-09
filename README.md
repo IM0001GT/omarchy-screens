@@ -8,9 +8,9 @@ Click the two-tile mark for a panel that stays open. Displays are drawn at their
   <img width="960" alt="Screens" src="preview.png" />
 </p>
 
-| Layout | This screen | HDR | Profiles | Workspaces | Pixel Care |
-| --- | --- | --- | --- | --- | --- |
-| Drag tiles; edges snap, neighbours reflow. Apply, then 10s Keep / Revert | Brightness, text size, resolution, Hz, scale slider, rotation, mirror, Detect | 8-bit or 10-bit PQ on HDR panels, Tune for black / peak | Name a desk; restore on connect | Optional spread of 1–10; right-click name, icon, Tile / Scroll / Float | Optional 0–100% bar dim, hover lift, no black veil |
+| Layout | This screen | Night Light | HDR | Profiles | Workspaces | Pixel Care |
+| --- | --- | --- | --- | --- | --- | --- |
+| Drag tiles; edges snap, neighbours reflow. Apply, then 10s Keep / Revert | Brightness (optional all-monitors), text size, resolution, Hz, scale slider, rotation, mirror, Detect | 1500K–6500K Kelvin slider and on/off, same hyprsunset temps as Omarchy | 8-bit or 10-bit PQ on HDR panels, Tune for black / peak | Name a desk; restore on connect | Optional spread of 1–10; right-click name, icon, Tile / Scroll / Float | Optional 0–100% bar dim, hover lift, no black veil |
 
 Works with two screens or a full battlestation. A fallback Hyprland rule still catches anything you hot-plug later. The panel scrolls when it is taller than the screen, so controls stay reachable at large scale (for example 2× on 1080p).
 
@@ -23,7 +23,7 @@ Omarchy's Display widget does brightness, text size, and scale. It does not arra
 Other listed tools cover adjacent jobs:
 
 - **Stock Display** — backlight, font size, scale presets, enable/disable
-- **hyprmoncfg** — named profiles and a hotplug daemon. If that plugin or `hyprmoncfgd` is still installed, it stays in control of screen settings. Screens warns and yields until **you** remove it; it will not disable another plugin or daemon for you
+- **hyprmoncfg** — named profiles and a hotplug daemon. If it is still **managing** Hyprland, Screens waits and offers a choice: keep the plugin and run `hyprmoncfg unmanage`, or remove `crmne.hyprmoncfg`. Screens will not do either until you pick. An unmanaged leftover is not treated as in control.
 - **HyprMod** — GTK settings app. If it still has per-display monitor rules, those load after `monitors.lua` and win. Screens warns until **you** open HyprMod, click the trash can next to each managed display, and save; it will not delete HyprMod's rules for you
 - **Generic layout editors** — often reuse the stock monitor glyph, skip snap, and leave HDR/VRR in `monitors.lua`
 
@@ -41,7 +41,7 @@ That places the plugin in `~/.config/omarchy/plugins/im0001gt.screens/` and can 
 
 The first time Screens runs, it copies every stock file it may change into `~/.local/state/im0001gt.screens/originals/` (and a copy of `monitors.lua` at `original-monitors.lua`). Those copies are never overwritten, live outside the plugin directory, and do not depend on a system snapshot. It then starts from a **fresh** Screens-owned `monitors.lua` taken from the live Hyprland layout, so leftover edits from hyprmoncfg or another layout tool cannot keep controlling the desk.
 
-If the [hyprmoncfg](https://github.com/crmne/omarchy-hyprmoncfg) plugin or its `hyprmoncfgd` daemon is still present, the Screens panel warns that it will stay in control until **you** remove it. Screens does not remove other plugins or stop other daemons. Typical cleanup is `omarchy plugin remove crmne.hyprmoncfg`, then stop `hyprmoncfgd` yourself if it is still running. The package is left in place unless you uninstall it.
+If [hyprmoncfg](https://github.com/crmne/omarchy-hyprmoncfg) is still managing displays, the Screens panel offers **Keep unmanaged** (`hyprmoncfg unmanage`, plugin can stay) or **Remove hyprmoncfg** (unmanage, then `omarchy plugin remove crmne.hyprmoncfg`). Screens does not do either until you click. If hyprmoncfg is already unmanaged, Screens takes over and only reminds you the plugin is still on the bar until you keep or remove it. The AUR package is left unless you drop it yourself.
 
 If [HyprMod](https://github.com/BlueManCZ/hyprmod) is managing displays, its `hyprland-gui.lua` (or `.conf`) rules load after Screens and keep winning. Open HyprMod, click the trash can next to each monitor, and save. You can keep HyprMod for other settings. Screens does not remove those rules.
 
@@ -58,17 +58,18 @@ If [HyprMod](https://github.com/BlueManCZ/hyprmod) is managing displays, its `hy
 
 **This screen**
 
-- Pick a screen, then set **brightness**, **text size**, **resolution**, **refresh**, **scale**, **orientation**, or **mirror**. Scale is per output (slider to 0.01, including 1.33×). Text size is remembered per display; Omarchy only has one desk font, so Apply uses that display's value
+- Pick a screen, then set **brightness**, **night light**, **text size**, **resolution**, **refresh**, **scale**, **orientation**, or **mirror**. Scale is per output (slider to 0.01, including 1.33×). Text size is remembered per display; Omarchy only has one desk font, so Apply uses that display's value
 - Layout, HDR, scale, and text size stay in the panel until **Apply**. **Undo** throws the draft away. Apply previews on the displays with a **10 second Keep / Revert**. Closing the panel without Keep undoes or reverts
 - **Super+/** and **Super+Alt+/** step the focused display's scale when those keys still belong to stock Display scaling. If you already bound them to something else, Screens asks before taking them (or offers Super+Ctrl+/ instead)
-- Brightness follows the selected output (internal backlight or DDC). It hides when that output has no backlight. A short label (Night owl, Golden hour, and so on) shows in the panel header while you drag the slider
+- Brightness follows the selected output (internal backlight or DDC). It hides when that output has no backlight. With two or more screens on, **All monitors** sets the same percentage on every connected display. A short label (Night owl, Golden hour, and so on) shows in the panel header while you drag the slider
+- **Night Light** sits under brightness: on/off plus a 1500K–6500K slider. It uses the same hyprsunset temperatures as `omarchy toggle nightlight` (4000K on, 6500K off) and refreshes the bar indicator
 - Text size uses Omarchy's 9–20 px stops and applies to the shell, GTK, and terminals
-- Laptop built-in panels are written as `eDP-1` / `LVDS` / `DSI` so Omarchy's clamshell helper keeps your scale instead of forcing 2
+- Laptop built-in panels are written as `eDP-1` / `LVDS` / `DSI` so Omarchy's clamshell helper keeps your scale instead of forcing 2. Turning the laptop panel off uses Omarchy's overlay toggle, not a named `disabled = true` in `monitors.lua`, so unplugging the last external display brings the built-in panel back
 - Labels use Hyprland's model string
 
 **HDR and VRR**
 
-- **HDR**: **Off**, **Auto**, or **Always**. Auto keeps the desktop in SDR and only switches to HDR for fullscreen games and video (`cm_auto_hdr`). Always leaves PQ on all the time and can wash out HDR-ready LCDs
+- **HDR**: **Off**, **Auto**, or **Always**. Auto keeps the desktop in SDR (no `sdr_max_luminance` / Display P3 metadata that makes Chromium and Electron look washed out) and only switches to HDR for fullscreen games and video (`cm_auto_hdr`). Always leaves PQ on all the time and can wash out HDR-ready LCDs
 - **Tune** (Auto or Always): 8-bit or 10-bit (Hyprland's real output depths), nine colour presets, wide-colour EDID override, SDR brightness/saturation/transfer, black floor, and SDR peak. Live scanout format is shown, not invented bit depths
 - Color space **Display** uses this panel's EDID primaries. **Wide** is BT.2020. HDR-ready LCDs that are not full wide-gamut should stay on Display
 - HDR and VRR disable themselves when that panel cannot do them
@@ -81,7 +82,7 @@ If [HyprMod](https://github.com/BlueManCZ/hyprmod) is managing displays, its `hy
 
 **Workspaces**
 
-- **Spread workspaces** pins ten workspaces across the screens that are on and not mirroring
+- **Spread workspaces** pins ten workspaces across the screens that are on and not mirroring. Omarchy 4.0.3 no longer lets a plugin register a second bar widget at runtime, so Screens installs a companion plugin (`im0001gt.screens.workspaces`) next to this one. You still only add Screens; spreading swaps that companion onto the bar in place of stock Workspaces.
 - Two screens: primary gets **1–5**, the next screen gets **6–10**. More screens split the ten as evenly as possible (a leftover slot goes to the first screens). Nine screens means one gets two workspaces and the rest get one
 - **Make primary** chooses which screen receives the first group
 - Each display's bar then shows only that screen's numbers. **Left-click** a number to go there. **Right-click** that same number to **name** it, pick an **icon**, or set **Tile**, **Scroll**, or **Float**. Those choices apply only to that workspace
@@ -111,6 +112,8 @@ omarchy plugin update im0001gt.screens --yes
 omarchy restart shell
 ```
 
+**1.12.0** is the Omarchy 4.0.3 fix, plus two older holes. The shell no longer lets a third-party service call `barWidgetRegistry.register()`, so spreading workspaces now ships as a generated companion plugin instead of a runtime registration. Unplugging the last external display re-enables the laptop panel, even if Hyprland briefly reports zero outputs, without reloading Hyprland over and over (that was leaving USB-C DP dongles stuck in USB-only mode so the external never came back). Apply/Keep/Revert keeps the Screens panel open across layout remaps (including scale on another display) until you click outside it. HDR Auto no longer writes the luminance / Display P3 metadata that washed out Chromium and Electron. Pixel Care dims the bar layer window itself (Omarchy 4.0.3 no longer lets a plugin reach `moduleSlots`). Hover still lifts it. **Night Light** (Kelvin slider + on/off) and **All monitors** brightness come from [sunshine144](https://github.com/sunshine144).
+
 ## Uninstall
 
 Restore the pre-Screens files first, then remove the plugin:
@@ -120,7 +123,7 @@ Restore the pre-Screens files first, then remove the plugin:
 omarchy plugin remove im0001gt.screens
 ```
 
-That puts back `monitors.lua`, `bindings.lua`, `shell.json`, and any workspace-layout files Screens captured, then removes the scale-key block and the brightness wrapper Screens added.
+That puts back `monitors.lua`, `bindings.lua`, `shell.json`, and any workspace-layout files Screens captured, then removes the scale-key block, the brightness wrapper Screens added, and the generated `im0001gt.screens.workspaces` companion plugin.
 
 Omarchy does not run an uninstall hook. If the plugin is already gone, the same restore still works from the first-install copy (it survives `plugin remove` and is independent of Timeshift or other system snapshots):
 
@@ -156,13 +159,17 @@ Screens.qml              Bar icon + click panel
 ScreenMark.qml           Two-tile bar/hero mark
 Workspaces.qml           Per-display workspace numbers (right-click layout)
 WorkspaceLayoutMenu.qml  Name, icon, Tile / Scroll / Float picker
-Service.qml              Registers the workspace widget
+Service.qml              Headless helper: Pixel Care, Apply/Revert, companion workspaces plugin
 Model.js                 Snap / normalize / workspace split helpers
 scripts/display-ctl      hyprctl snapshot, monitors.lua writer, hyprmoncfg / HyprMod check, scale keys
 preview.png              Marketplace still
 ```
 
 The repo root **is** the plugin. That is what `omarchy plugin add` and `omarchy plugin validate` expect.
+
+## Credits
+
+**Night Light** (Kelvin slider and on/off) and **All monitors** brightness were contributed by [sunshine144](https://github.com/sunshine144).
 
 ## License
 
