@@ -167,6 +167,10 @@ preview.png              Marketplace still
 
 The repo root **is** the plugin. That is what `omarchy plugin add` and `omarchy plugin validate` expect.
 
+## Credits
+
+**Night Light** (Kelvin slider and on/off) and **All monitors** brightness were contributed by [sunshine144](https://github.com/sunshine144).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
