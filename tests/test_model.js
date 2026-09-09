@@ -55,6 +55,9 @@ assert.ok(Model.applyBarCareToWindow({ contentItem: content }, { enabled: true, 
 assert.strictEqual(content.opacity, 1)
 assert.ok(!Model.applyBarCareToWindow(null, { enabled: true, dim: 85 }))
 assert.ok(!Model.applyBarCareToWindow({}, { enabled: true, dim: 85 }))
+const held = { opacity: 0.15, data: [] }
+assert.ok(Model.applyBarCareToWindow({ contentItem: held }, { enabled: true, dim: 85, hoverLift: true }, { hovered: false }))
+assert.strictEqual(held.opacity, 0.15)
 assert.strictEqual(Model.formatScale(1.33), "1.33")
 assert.strictEqual(Model.formatScale(1.5), "1.5")
 assert.ok(Model.scaleIsSharp({ width: 3840, height: 2160 }, 1.25))

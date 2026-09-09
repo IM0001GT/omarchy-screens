@@ -710,9 +710,15 @@ function windowTreeHovered(item, depth) {
 function applyBarCareToWindow(win, care, state) {
   if (!win || !win.contentItem)
     return false
-  var hovered = !!(state && state.hovered) || windowTreeHovered(win.contentItem, 0)
-  var hidden = !!(state && state.barHidden)
+  var st = state || {}
+  var hovered = Object.prototype.hasOwnProperty.call(st, "hovered")
+    ? !!st.hovered
+    : windowTreeHovered(win.contentItem, 0)
+  var hidden = !!st.barHidden
   var opacity = barOpacityFor(care, { hovered: hovered, barHidden: hidden })
+  var cur = Number(win.contentItem.opacity)
+  if (isFinite(cur) && Math.abs(cur - opacity) < 0.001)
+    return true
   try { win.contentItem.opacity = opacity } catch (e) { return false }
   return true
 }

@@ -707,6 +707,12 @@ Panel {
     root.layoutMenuOpen = true
   }
 
+  property var careHover: null
+  readonly property var careWindow: (typeof button !== "undefined" && button && button.QsWindow)
+    ? button.QsWindow.window
+    : (root.QsWindow ? root.QsWindow.window : null)
+  onCareWindowChanged: root.applyCareVisuals()
+
   function hostBar() {
     var host = Model.findHostBar(root)
     if (host) return host
@@ -714,13 +720,34 @@ Panel {
     return null
   }
 
+  function barWindow() {
+    if (typeof button !== "undefined" && button && button.QsWindow && button.QsWindow.window)
+      return button.QsWindow.window
+    if (root.QsWindow && root.QsWindow.window)
+      return root.QsWindow.window
+    return null
+  }
+
+  function ensureCareHover() {
+    var win = root.barWindow()
+    if (!win || !win.contentItem) return null
+    if (root.careHover) return root.careHover
+    try {
+      root.careHover = Qt.createQmlObject("import QtQuick; HoverHandler { }", win.contentItem)
+      root.careHover.hoveredChanged.connect(function() { root.applyCareVisuals() })
+    } catch (e) {
+      root.careHover = null
+    }
+    return root.careHover
+  }
+
   function applyCareVisuals() {
-    var win = (typeof button !== "undefined" && button && button.QsWindow && button.QsWindow.window)
-      || (root.QsWindow && root.QsWindow.window)
-      || null
-    if (Model.applyBarCareToWindow(win, root.barCare, {}))
+    var win = root.barWindow()
+    var hover = root.ensureCareHover()
+    var hovered = !!(hover && hover.hovered)
+    if (Model.applyBarCareToWindow(win, root.barCare, { hovered: hovered }))
       return
-    Model.applyBarCare(root.hostBar(), root.barCare, {})
+    Model.applyBarCare(root.hostBar(), root.barCare, { hovered: hovered })
   }
 
   function pushCareToService(next) {
@@ -789,6 +816,14 @@ Panel {
   Component.onCompleted: {
     refresh()
     root.applyCareVisuals()
+  }
+  Component.onDestruction: {
+    if (root.careHover) {
+      try { root.careHover.destroy() } catch (e) {}
+      root.careHover = null
+    }
+    var win = root.barWindow()
+    if (win && win.contentItem) win.contentItem.opacity = 1
   }
   onOpenedChanged: {
     if (!opened) {
@@ -963,12 +998,7 @@ Panel {
     Component.onCompleted: reload()
   }
 
-  Timer {
-    interval: 400
-    running: !!(root.barCare && root.barCare.enabled)
-    repeat: true
-    onTriggered: root.applyCareVisuals()
-  }
+
 
   Process {
     id: setBrightnessProc

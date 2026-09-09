@@ -83,12 +83,7 @@ Item {
     Component.onCompleted: reload()
   }
 
-  Timer {
-    interval: 400
-    running: root.careEnabled
-    repeat: true
-    onTriggered: root.applyCareVisuals()
-  }
+
 
   property real revertDeadline: 0
 
