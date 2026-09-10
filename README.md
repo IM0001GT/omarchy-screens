@@ -87,6 +87,9 @@ If [HyprMod](https://github.com/BlueManCZ/hyprmod) is managing displays, its `hy
 - **Make primary** chooses which screen receives the first group
 - Each display's bar then shows only that screen's numbers. **Left-click** a number to go there. **Right-click** that same number to **name** it, pick an **icon**, or set **Tile**, **Scroll**, or **Float**. Those choices apply only to that workspace
 - If the active workspace has a name, it appears as a chip next to the numbers
+- **Assign by monitor** — the panel's **ASSIGNED WORKSPACES** editor lists every screen that is on and not mirroring, each with its digit chips. Toggle a digit to move that workspace to the screen. A workspace you leave unassigned shows on the screen where it currently lives, dimmed, until you pin it somewhere
+- **Split evenly** recomputes the automatic split from scratch (primary first, then the next screens), replacing your custom plan
+- The same controls are available from the terminal: `scripts/display-ctl workspaces plan` prints the current plan, `workspaces assign '<json>'` pins a custom per-monitor plan, and `workspaces auto` restores the automatic split
 - Turning the toggle off restores Omarchy's stock workspace widget and leaves windows where they are
 
 **Profiles**

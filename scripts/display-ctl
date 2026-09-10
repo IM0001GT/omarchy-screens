@@ -14,7 +14,7 @@ Commands:
   profile apply <name>
   profile auto 0|1
   profile primary <identity>
-  workspaces on|off|sync
+  workspaces on|off|sync|auto|assign <json>|plan
   workspace-layout <id> tile|scroll|float
   workspace-label <id> [name] [icon]
   idle off|on|notice
@@ -735,7 +735,7 @@ def snapshot():
         "hybridGpus": hybrid_gpus(),
         "hybridNotice": hybrid_gpus() and not store.get("hybridNoticeShown"),
         "manageWorkspaces": bool(store.get("manageWorkspaces")),
-        "workspacePlan": workspace_plan(monitors, primary) if store.get("manageWorkspaces") else [],
+        "workspacePlan": plan_for_write(monitors) if store.get("manageWorkspaces") else [],
         "workspaceLayouts": store.get("workspaceLayouts") or {},
         "conflict": public_conflict(detect_conflicts()),
         "claimedMonitors": bool(store.get("claimedMonitors")),
@@ -1548,8 +1548,120 @@ def workspace_plan(monitors, primary=""):
     return plan
 
 
+def saved_plan():
+    """The saved per-monitor workspace plan from workspaces.json, if any."""
+    data = read_workspaces_json()
+    plan = data.get("monitors")
+    if isinstance(plan, list) and plan:
+        return plan
+    return None
+
+
+def plan_for_write(monitors):
+    """Saved custom plan when present, else the auto equal split."""
+    plan = saved_plan()
+    if plan is not None:
+        return plan
+    return workspace_plan(monitors, load_store().get("primary") or "")
+
+
+def normalize_plan(monitors, raw):
+    """Resolve a user-supplied plan into canonical shape, validating ids.
+
+    Each raw item may reference a monitor by connector name or identity.
+    Returns (plan, errors). Workspace ids must be unique and within range;
+    duplicating or out-of-range ids is reported, not silently dropped.
+    """
+    known = {}
+    for mon in monitors or []:
+        ident = mon.get("identity") or monitor_identity(mon)
+        known.setdefault(clean_connector(mon.get("name") or ""), mon)
+        if ident:
+            known.setdefault(ident, mon)
+    plan = []
+    used = set()
+    errors = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            errors.append("plan item must be an object: %r" % (item,))
+            continue
+        ref = str(item.get("name") or item.get("identity") or "").strip()
+        mon = known.get(ref) or known.get(clean_connector(ref))
+        if ref and not mon:
+            errors.append("no such display: %s" % ref)
+            continue
+        if not mon:
+            errors.append("plan item missing a display name or identity")
+            continue
+        ids = []
+        for ws in item.get("ids") or []:
+            try:
+                ws = int(ws)
+            except (TypeError, ValueError):
+                errors.append("workspace must be a number: %r" % (ws,))
+                continue
+            if ws < 1 or ws > WORKSPACE_COUNT:
+                errors.append("workspace %d out of range 1-%d" % (ws, WORKSPACE_COUNT))
+                continue
+            if ws in used:
+                errors.append("workspace %d assigned to more than one screen" % ws)
+                continue
+            used.add(ws)
+            ids.append(ws)
+        ids.sort()
+        plan.append({
+            "name": mon.get("name") or "",
+            "identity": mon.get("identity") or monitor_identity(mon),
+            "label": mon.get("label") or mon.get("name") or "",
+            "ids": ids,
+            "first": ids[0] if ids else 0,
+            "last": ids[-1] if ids else 0,
+        })
+    return plan, errors
+
+
+def assign_workspaces(raw):
+    monitors = snapshot()["monitors"]
+    plan, errors = normalize_plan(monitors, raw)
+    if errors:
+        for err in errors:
+            print("workspaces assign: %s" % err, file=sys.stderr)
+        return 2
+    store = load_store()
+    write_workspaces_json(True, plan, store.get("workspaceLayouts") or {})
+    write_monitors_lua(snapshot_monitors_for_write())
+    reload_hypr()
+    pin_workspaces(plan)
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
+
+
+def auto_workspaces():
+    store = load_store()
+    monitors = snapshot()["monitors"]
+    plan = workspace_plan(monitors, store.get("primary") or "")
+    write_workspaces_json(True, plan, store.get("workspaceLayouts") or {})
+    write_monitors_lua(snapshot_monitors_for_write())
+    reload_hypr()
+    pin_workspaces(plan)
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
+
+
+def report_workspace_plan():
+    data = read_workspaces_json()
+    print(json.dumps({
+        "enabled": bool(data.get("enabled")),
+        "total": data.get("total", WORKSPACE_COUNT),
+        "monitors": data.get("monitors") or [],
+        "layouts": data.get("layouts") or {},
+        "labels": data.get("labels") or {},
+    }, separators=(",", ":")))
+    return 0
+
+
 def workspace_rule_lines(monitors, primary=""):
-    plan = workspace_plan(monitors, primary)
+    plan = plan_for_write(monitors)
     used = set()
     refs = {}
     for mon in monitors or []:
@@ -3329,7 +3441,7 @@ def pin_workspaces(plan):
 
 def pin_and_save_plan(monitors):
     store = load_store()
-    plan = workspace_plan(monitors, store.get("primary") or "")
+    plan = plan_for_write(monitors)
     write_workspaces_json(True, plan, store.get("workspaceLayouts") or {})
     pin_workspaces(plan)
     for ws_id, mode in (store.get("workspaceLayouts") or {}).items():
@@ -3345,6 +3457,12 @@ def bar_entry_id(entry):
     if isinstance(entry, dict):
         return str(entry.get("id") or "")
     return ""
+
+
+def plugin_present(plugin_id):
+    if not plugin_id:
+        return False
+    return os.path.isdir(os.path.join(os.path.expanduser("~/.config/omarchy/plugins"), plugin_id))
 
 
 def find_workspaces_slot(config):
@@ -3532,7 +3650,7 @@ def swap_bar_workspaces(enable):
         if eid != OUR_WS_WIDGET:
             return
         new_id = store.get("workspacesBarId") or STOCK_WS_WIDGET
-        if new_id == OUR_WS_WIDGET:
+        if new_id == OUR_WS_WIDGET or not plugin_present(new_id):
             new_id = STOCK_WS_WIDGET
     if isinstance(entry, str):
         config["bar"]["layout"][section][index] = new_id
@@ -3563,7 +3681,7 @@ def set_manage_workspaces(on):
         install_workspaces_plugin()
         swap_bar_workspaces(True)
     else:
-        write_workspaces_json(False, [], store.get("workspaceLayouts") or {})
+        write_workspaces_json(False, saved_plan() or [], store.get("workspaceLayouts") or {})
         swap_bar_workspaces(False)
     print(json.dumps(snapshot(), separators=(",", ":")))
     return 0
@@ -3677,7 +3795,7 @@ def set_workspace_layout(ws_id, mode):
     apply_layout_live(ws_id, mode)
     if store.get("manageWorkspaces"):
         live = snapshot()["monitors"]
-        write_workspaces_json(True, workspace_plan(live, store.get("primary") or ""), layouts)
+        write_workspaces_json(True, plan_for_write(live), layouts)
     else:
         write_workspaces_json(False, [], layouts)
     print(json.dumps(snapshot(), separators=(",", ":")))
@@ -3847,9 +3965,21 @@ def main(argv):
             return set_manage_workspaces(True)
         if action in ("off", "0", "false"):
             return set_manage_workspaces(False)
-        if action == "sync":
+        if action == "auto":
+            return auto_workspaces()
+        if action in ("sync", "rebalance"):
             return sync_workspaces()
-        print("workspaces: on|off|sync", file=sys.stderr)
+        if action == "plan":
+            return report_workspace_plan()
+        if action == "assign":
+            raw = argv[2] if len(argv) > 2 else sys.stdin.read()
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                print("workspaces assign: bad json: %s" % exc, file=sys.stderr)
+                return 2
+            return assign_workspaces(payload)
+        print("workspaces: on|off|sync|auto|assign <json>|plan", file=sys.stderr)
         return 2
     if cmd == "workspace-layout":
         return set_workspace_layout(

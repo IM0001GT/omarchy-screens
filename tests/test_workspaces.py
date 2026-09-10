@@ -45,7 +45,11 @@ class SplitCounts(unittest.TestCase):
 
 class WorkspacePlan(unittest.TestCase):
     def setUp(self):
+        import tempfile
         self.ctl = load_ctl()
+        self.tmp = tempfile.mkdtemp()
+        self.ctl.WORKSPACES_JSON = os.path.join(self.tmp, "workspaces.json")
+        self.ctl.PROFILES_PATH = os.path.join(self.tmp, "profiles.json")
         self.left = {
             "name": "DP-4",
             "description": "HYC CO. LTD. DUAL-DVI",
@@ -66,6 +70,10 @@ class WorkspacePlan(unittest.TestCase):
             "identity": "desc:LG Electronics LG TV SSCR2 0x01010101",
             "mirror": "",
         }
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_primary_gets_first_half(self):
         plan = self.ctl.workspace_plan([self.left, self.right], self.right["identity"])
