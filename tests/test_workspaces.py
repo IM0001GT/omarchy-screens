@@ -964,6 +964,50 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
         self.assertFalse(self.ctl.remove_workspaces_plugin())
         self.assertTrue(os.path.isdir(dest))
 
+    def test_install_refuses_unrelated_directory(self):
+        dest = self.companion_dir()
+        os.makedirs(dest, exist_ok=True)
+        with open(os.path.join(dest, "manifest.json"), "w", encoding="utf-8") as fh:
+            json.dump({"id": "someone.else"}, fh)
+        self.assertFalse(self.ctl.install_workspaces_plugin())
+        with open(os.path.join(dest, "manifest.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["id"], "someone.else")
+
+    def test_install_refuses_symlink_destination(self):
+        dest = self.companion_dir()
+        target = os.path.join(self.tmp.name, "other-plugin")
+        os.makedirs(target, exist_ok=True)
+        with open(os.path.join(target, "keep.txt"), "w", encoding="utf-8") as fh:
+            fh.write("safe")
+        os.symlink(target, dest)
+        self.assertFalse(self.ctl.install_workspaces_plugin())
+        self.assertTrue(os.path.islink(dest))
+        self.assertTrue(os.path.isfile(os.path.join(target, "keep.txt")))
+
+    def test_remove_refuses_symlink_destination(self):
+        dest = self.companion_dir()
+        target = os.path.join(self.tmp.name, "generated-lookalike")
+        os.makedirs(target, exist_ok=True)
+        with open(os.path.join(target, "generated-by-im0001gt.screens.json"), "w", encoding="utf-8") as fh:
+            json.dump({"generatedBy": "im0001gt.screens"}, fh)
+        os.symlink(target, dest)
+        self.assertFalse(self.ctl.remove_workspaces_plugin())
+        self.assertTrue(os.path.islink(dest))
+        self.assertTrue(os.path.isdir(target))
+
+    def test_install_refuses_unrelated_backup_dir(self):
+        dest = self.companion_dir()
+        self.assertTrue(self.ctl.install_workspaces_plugin())
+        backup = dest + ".old"
+        os.makedirs(backup, exist_ok=True)
+        with open(os.path.join(backup, "foreign.txt"), "w", encoding="utf-8") as fh:
+            fh.write("do not delete")
+        with open(os.path.join(self.src, "Workspaces.qml"), "a", encoding="utf-8") as fh:
+            fh.write("\n// refresh\n")
+        self.assertFalse(self.ctl.install_workspaces_plugin())
+        self.assertTrue(os.path.isfile(os.path.join(backup, "foreign.txt")))
+        self.assertTrue(self.ctl.is_generated_workspaces_plugin(dest))
+
     def test_restore_original_removes_generated_companion(self):
         self.ctl.install_workspaces_plugin()
         orig = os.path.join(self.tmp.name, "originals")
