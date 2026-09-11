@@ -178,6 +178,7 @@ Panel {
   property bool stickyPanel: false
   property string panelOwnerScreen: ""
   property int resumeTries: 0
+  property bool panelScrolling: false
   readonly property var identifyScreen: {
     var name = selected ? selected.name : ""
     var screens = Quickshell.screens
@@ -1374,6 +1375,12 @@ Panel {
   }
 
   Timer {
+    id: panelScrollIdle
+    interval: 420
+    onTriggered: root.panelScrolling = false
+  }
+
+  Timer {
     id: brightnessDebounce
     interval: 180
     repeat: false
@@ -1534,12 +1541,22 @@ Panel {
       Flickable {
         id: panelFlick
         anchors.fill: parent
+        anchors.bottomMargin: applyDock.visible ? applyDock.height : 0
         contentWidth: width
         contentHeight: panelColumn.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
         interactive: contentHeight > height && !root.dragging
+        onMovementStarted: {
+          root.panelScrolling = true
+          panelScrollIdle.restart()
+        }
+        onMovementEnded: panelScrollIdle.restart()
+        onFlickStarted: {
+          root.panelScrolling = true
+          panelScrollIdle.restart()
+        }
 
         Column {
           id: panelColumn
@@ -1603,76 +1620,6 @@ Panel {
               horizontalPadding: Style.space(10)
               verticalPadding: Style.space(4)
               onClicked: root.dismissConflict()
-            }
-          }
-
-          Column {
-            width: parent.width
-            spacing: Style.space(6)
-            visible: root.layoutDirty || root.pendingConfirm
-
-            Text {
-              width: parent.width
-              wrapMode: Text.WordWrap
-              text: root.pendingConfirm
-                ? ("Keep this layout? Reverting in " + root.revertLeft + "s")
-                : "Changes are only in this panel. Apply to preview, Undo to throw them away."
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.body
-            }
-
-            Row {
-              width: parent.width
-              spacing: Style.space(8)
-
-              Button {
-                visible: !root.pendingConfirm
-                width: (parent.width - parent.spacing) / 2
-                text: "Apply"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                active: true
-                tooltipText: "Preview on the displays. Reverts in 20 seconds unless you Keep."
-                onClicked: root.applyDraft()
-              }
-
-              Button {
-                visible: !root.pendingConfirm
-                width: (parent.width - parent.spacing) / 2
-                text: "Undo"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                tooltipText: "Throw away panel changes and restore the last live layout."
-                onClicked: root.undoDraft()
-              }
-
-              Button {
-                visible: root.pendingConfirm
-                width: (parent.width - parent.spacing) / 2
-                text: "Keep"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                active: true
-                onClicked: root.keepLayout()
-              }
-
-              Button {
-                visible: root.pendingConfirm
-                width: (parent.width - parent.spacing) / 2
-                text: "Revert"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                onClicked: root.revertLayout()
-              }
             }
           }
 
@@ -1847,7 +1794,7 @@ Panel {
                 }
               }
 
-              PanelSlider {
+              ScreensSlider {
                 width: parent.width
                 bar: root.bar
                 minimum: 0
@@ -2606,254 +2553,6 @@ Panel {
               }
             }
 
-            Column {
-              visible: root.brightnessAvailable
-              width: parent.width
-              spacing: Style.space(6)
-
-              Item {
-                width: parent.width
-                implicitHeight: Math.max(brightnessHeader.implicitHeight, brightnessPercentLabel.implicitHeight)
-
-                PanelSectionHeader {
-                  id: brightnessHeader
-                  text: "BRIGHTNESS"
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
-                  anchors.left: parent.left
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-
-                Text {
-                  id: brightnessPercentLabel
-                  text: Math.round(brightnessSlider.dragging ? brightnessSlider.liveValue : root.brightnessPercent) + "%"
-                  color: Qt.darker(root.bar.foreground, 1.4)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-              }
-
-              PanelSlider {
-                id: brightnessSlider
-                width: parent.width
-                bar: root.bar
-                minimum: 1
-                maximum: 100
-                step: 1
-                value: root.brightnessPercent
-                integer: true
-                onMoved: function(v) { root.previewBrightness(v) }
-                onReleased: function(v) {
-                  brightnessDebounce.stop()
-                  root.setBrightness(v)
-                }
-              }
-
-              Toggle {
-                visible: root.enabledCount > 1
-                width: parent.width
-                label: "All monitors"
-                description: "Set the same brightness on every connected display"
-                checked: root.allMonitorsBrightness
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
-                onClicked: root.allMonitorsBrightness = !root.allMonitorsBrightness
-              }
-            }
-
-            Column {
-              width: parent.width
-              spacing: Style.space(6)
-
-              Item {
-                width: parent.width
-                implicitHeight: Math.max(nightlightHeader.implicitHeight, nightlightRow.implicitHeight)
-
-                PanelSectionHeader {
-                  id: nightlightHeader
-                  text: "NIGHT LIGHT"
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
-                  anchors.left: parent.left
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-
-                Row {
-                  id: nightlightRow
-                  spacing: Style.space(8)
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-
-                  Text {
-                    text: root.nightlightEnabled
-                      ? (Math.round(nightlightSlider.dragging ? nightlightSlider.liveValue : root.nightlightTemp) + "K")
-                      : "OFF"
-                    color: Qt.darker(root.bar.foreground, 1.4)
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.caption
-                    font.bold: true
-                    anchors.verticalCenter: parent.verticalCenter
-                  }
-
-                  ToggleSwitch {
-                    checked: root.nightlightEnabled
-                    foreground: root.bar.foreground
-                    onToggled: root.setNightlightEnabled(!root.nightlightEnabled)
-                  }
-                }
-              }
-
-              PanelSlider {
-                id: nightlightSlider
-                width: parent.width
-                bar: root.bar
-                minimum: 1500
-                maximum: 6500
-                step: 50
-                value: root.nightlightTemp
-                integer: true
-                onMoved: function(v) { root.previewNightlight(v) }
-                onReleased: function(v) {
-                  nightlightDebounce.stop()
-                  root.setNightlight(v)
-                }
-              }
-            }
-
-            Column {
-              width: parent.width
-              spacing: Style.space(6)
-
-              Item {
-                width: parent.width
-                implicitHeight: Math.max(textSizeHeader.implicitHeight, textSizePx.implicitHeight)
-
-                PanelSectionHeader {
-                  id: textSizeHeader
-                  text: "TEXT SIZE"
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
-                  anchors.left: parent.left
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-
-                Text {
-                  id: textSizePx
-                  text: (textSizeSlider.dragging
-                    ? root.textSizeStops[Math.round(textSizeSlider.liveValue)]
-                    : root.displayedTextPx()) + "px"
-                  color: Qt.darker(root.bar.foreground, 1.4)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-              }
-
-              PanelSlider {
-                id: textSizeSlider
-                width: parent.width
-                bar: root.bar
-                minimum: 0
-                maximum: root.textSizeStops.length - 1
-                step: 1
-                integer: true
-                tickCount: root.textSizeStops.length
-                value: root.currentTextIndex()
-                onMoved: function(v) { root.setTextSize(root.textSizeStops[Math.round(v)]) }
-              }
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "Remembered per display. Omarchy only has one desk font, so Apply uses this display's size for shell, GTK, and terminals. Scale below is truly per output."
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            Column {
-              id: scaleSection
-              width: parent.width
-              spacing: Style.space(4)
-
-              Item {
-                width: parent.width
-                implicitHeight: Math.max(scaleHeader.implicitHeight, scaleValue.implicitHeight)
-
-                PanelSectionHeader {
-                  id: scaleHeader
-                  text: "SCALE"
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
-                  anchors.left: parent.left
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-
-                Text {
-                  id: scaleValue
-                  text: Model.formatScale(root.selected ? root.selected.scale : 1) + "×"
-                  color: Qt.darker(root.bar.foreground, 1.4)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-              }
-
-              PanelSlider {
-                width: parent.width
-                bar: root.bar
-                minimum: 1.0
-                maximum: 4.0
-                step: 0.01
-                value: root.selected && Number(root.selected.scale) > 0 ? Number(root.selected.scale) : 1
-                onMoved: function(v) { root.setScale(v) }
-              }
-
-              Grid {
-                id: scaleRow
-                width: parent.width
-                columns: root.scalePresets.length
-                spacing: Style.spacing.xs
-                readonly property real cellWidth: (width - spacing * (columns - 1)) / columns
-
-                Repeater {
-                  model: root.scalePresets
-
-                  Button {
-                    required property string modelData
-                    width: scaleRow.cellWidth
-                    text: Number(modelData).toString() + "×"
-                    fontSize: Style.font.caption
-                    fontFamily: root.bar.fontFamily
-                    foreground: root.bar.foreground
-                    bordered: true
-                    active: root.selected && Math.abs(Number(root.selected.scale) - Number(modelData)) < 0.005
-                    onClicked: root.setScale(modelData, true)
-                  }
-                }
-              }
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                visible: !!(root.selected)
-                text: Model.scaleIsSharp(root.selected, root.selected ? root.selected.scale : 1)
-                  ? "This output only. Whole-pixel scale — sharp."
-                  : "This output only. Logical size is not whole pixels — may look soft. Try 1.25 or 1.33."
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-
             Row {
               width: parent.width
               spacing: Style.space(8)
@@ -3070,7 +2769,7 @@ Panel {
                     }
                   }
 
-                  PanelSlider {
+                  ScreensSlider {
                     width: parent.width
                     bar: root.bar
                     minimum: 0.8
@@ -3125,7 +2824,7 @@ Panel {
                     }
                   }
 
-                  PanelSlider {
+                  ScreensSlider {
                     width: parent.width
                     bar: root.bar
                     minimum: 0.5
@@ -3170,7 +2869,7 @@ Panel {
                     }
                   }
 
-                  PanelSlider {
+                  ScreensSlider {
                     width: parent.width
                     bar: root.bar
                     minimum: 0
@@ -3225,7 +2924,7 @@ Panel {
                     }
                   }
 
-                  PanelSlider {
+                  ScreensSlider {
                     width: parent.width
                     bar: root.bar
                     minimum: 80
@@ -3289,6 +2988,254 @@ Panel {
               font.pixelSize: Style.font.caption
             }
 
+            Column {
+              visible: root.brightnessAvailable
+              width: parent.width
+              spacing: Style.space(6)
+
+              Item {
+                width: parent.width
+                implicitHeight: Math.max(brightnessHeader.implicitHeight, brightnessPercentLabel.implicitHeight)
+
+                PanelSectionHeader {
+                  id: brightnessHeader
+                  text: "BRIGHTNESS"
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  id: brightnessPercentLabel
+                  text: Math.round(brightnessSlider.dragging ? brightnessSlider.liveValue : root.brightnessPercent) + "%"
+                  color: Qt.darker(root.bar.foreground, 1.4)
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+
+              ScreensSlider {
+                id: brightnessSlider
+                width: parent.width
+                bar: root.bar
+                minimum: 1
+                maximum: 100
+                step: 1
+                value: root.brightnessPercent
+                integer: true
+                onMoved: function(v) { root.previewBrightness(v) }
+                onReleased: function(v) {
+                  brightnessDebounce.stop()
+                  root.setBrightness(v)
+                }
+              }
+
+              Toggle {
+                visible: root.enabledCount > 1
+                width: parent.width
+                label: "All monitors"
+                description: "Set the same brightness on every connected display"
+                checked: root.allMonitorsBrightness
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                onClicked: root.allMonitorsBrightness = !root.allMonitorsBrightness
+              }
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Item {
+                width: parent.width
+                implicitHeight: Math.max(nightlightHeader.implicitHeight, nightlightRow.implicitHeight)
+
+                PanelSectionHeader {
+                  id: nightlightHeader
+                  text: "NIGHT LIGHT"
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Row {
+                  id: nightlightRow
+                  spacing: Style.space(8)
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  Text {
+                    text: root.nightlightEnabled
+                      ? (Math.round(nightlightSlider.dragging ? nightlightSlider.liveValue : root.nightlightTemp) + "K")
+                      : "OFF"
+                    color: Qt.darker(root.bar.foreground, 1.4)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  ToggleSwitch {
+                    checked: root.nightlightEnabled
+                    foreground: root.bar.foreground
+                    onToggled: root.setNightlightEnabled(!root.nightlightEnabled)
+                  }
+                }
+              }
+
+              ScreensSlider {
+                id: nightlightSlider
+                width: parent.width
+                bar: root.bar
+                minimum: 1500
+                maximum: 6500
+                step: 50
+                value: root.nightlightTemp
+                integer: true
+                onMoved: function(v) { root.previewNightlight(v) }
+                onReleased: function(v) {
+                  nightlightDebounce.stop()
+                  root.setNightlight(v)
+                }
+              }
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Item {
+                width: parent.width
+                implicitHeight: Math.max(textSizeHeader.implicitHeight, textSizePx.implicitHeight)
+
+                PanelSectionHeader {
+                  id: textSizeHeader
+                  text: "TEXT SIZE"
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  id: textSizePx
+                  text: (textSizeSlider.dragging
+                    ? root.textSizeStops[Math.round(textSizeSlider.liveValue)]
+                    : root.displayedTextPx()) + "px"
+                  color: Qt.darker(root.bar.foreground, 1.4)
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+
+              ScreensSlider {
+                id: textSizeSlider
+                width: parent.width
+                bar: root.bar
+                minimum: 0
+                maximum: root.textSizeStops.length - 1
+                step: 1
+                integer: true
+                tickCount: root.textSizeStops.length
+                value: root.currentTextIndex()
+                onMoved: function(v) { root.setTextSize(root.textSizeStops[Math.round(v)]) }
+              }
+
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "Remembered per display. Omarchy only has one desk font, so Apply uses this display's size for shell, GTK, and terminals. Scale below is truly per output."
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Column {
+              id: scaleSection
+              width: parent.width
+              spacing: Style.space(4)
+
+              Item {
+                width: parent.width
+                implicitHeight: Math.max(scaleHeader.implicitHeight, scaleValue.implicitHeight)
+
+                PanelSectionHeader {
+                  id: scaleHeader
+                  text: "SCALE"
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  id: scaleValue
+                  text: Model.formatScale(root.selected ? root.selected.scale : 1) + "×"
+                  color: Qt.darker(root.bar.foreground, 1.4)
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+
+              ScreensSlider {
+                width: parent.width
+                bar: root.bar
+                minimum: 1.0
+                maximum: 4.0
+                step: 0.01
+                value: root.selected && Number(root.selected.scale) > 0 ? Number(root.selected.scale) : 1
+                onMoved: function(v) { root.setScale(v) }
+              }
+
+              Grid {
+                id: scaleRow
+                width: parent.width
+                columns: root.scalePresets.length
+                spacing: Style.spacing.xs
+                readonly property real cellWidth: (width - spacing * (columns - 1)) / columns
+
+                Repeater {
+                  model: root.scalePresets
+
+                  Button {
+                    required property string modelData
+                    width: scaleRow.cellWidth
+                    text: Number(modelData).toString() + "×"
+                    fontSize: Style.font.caption
+                    fontFamily: root.bar.fontFamily
+                    foreground: root.bar.foreground
+                    bordered: true
+                    active: root.selected && Math.abs(Number(root.selected.scale) - Number(modelData)) < 0.005
+                    onClicked: root.setScale(modelData, true)
+                  }
+                }
+              }
+
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                visible: !!(root.selected)
+                text: Model.scaleIsSharp(root.selected, root.selected ? root.selected.scale : 1)
+                  ? "This output only. Whole-pixel scale — sharp."
+                  : "This output only. Logical size is not whole pixels — may look soft. Try 1.25 or 1.33."
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
             Toggle {
               width: parent.width
               label: "Enable this Display"
@@ -3330,6 +3277,98 @@ Panel {
           }
 
           Item { width: parent.width; height: Style.space(8) }
+        }
+      }
+
+      Rectangle {
+        id: applyDock
+        visible: root.layoutDirty || root.pendingConfirm
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        color: root.bar && root.bar.background !== undefined ? root.bar.background : Color.background
+        height: applyDockCol.implicitHeight + Style.space(16)
+
+        Rectangle {
+          anchors.top: parent.top
+          anchors.left: parent.left
+          anchors.right: parent.right
+          height: 1
+          color: Util.alpha(root.bar.foreground, 0.16)
+        }
+
+        Column {
+          id: applyDockCol
+          width: parent.width
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          anchors.bottomMargin: Style.space(8)
+          spacing: Style.space(6)
+
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: root.pendingConfirm
+              ? ("Keep this layout? Reverting in " + root.revertLeft + "s")
+              : "Apply to preview on the displays. Undo throws the panel changes away."
+            color: root.bar.foreground
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Row {
+            width: parent.width
+            spacing: Style.space(8)
+
+            Button {
+              visible: !root.pendingConfirm
+              width: (parent.width - parent.spacing) / 2
+              text: "Apply"
+              fontSize: Style.font.caption
+              fontFamily: root.bar.fontFamily
+              foreground: root.bar.foreground
+              bordered: true
+              active: true
+              tooltipText: "Preview on the displays. Reverts in 20 seconds unless you Keep."
+              onClicked: root.applyDraft()
+            }
+
+            Button {
+              visible: !root.pendingConfirm
+              width: (parent.width - parent.spacing) / 2
+              text: "Undo"
+              fontSize: Style.font.caption
+              fontFamily: root.bar.fontFamily
+              foreground: root.bar.foreground
+              bordered: true
+              tooltipText: "Throw away panel changes and restore the last live layout."
+              onClicked: root.undoDraft()
+            }
+
+            Button {
+              visible: root.pendingConfirm
+              width: (parent.width - parent.spacing) / 2
+              text: "Keep"
+              fontSize: Style.font.caption
+              fontFamily: root.bar.fontFamily
+              foreground: root.bar.foreground
+              bordered: true
+              active: true
+              onClicked: root.keepLayout()
+            }
+
+            Button {
+              visible: root.pendingConfirm
+              width: (parent.width - parent.spacing) / 2
+              text: "Revert"
+              fontSize: Style.font.caption
+              fontFamily: root.bar.fontFamily
+              foreground: root.bar.foreground
+              bordered: true
+              onClicked: root.revertLayout()
+            }
+          }
         }
       }
     }
