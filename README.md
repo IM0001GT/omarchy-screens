@@ -87,7 +87,7 @@ If [HyprMod](https://github.com/BlueManCZ/hyprmod) is managing displays, its `hy
 - **Make primary** chooses which screen receives the first group
 - Each display's bar then shows only that screen's numbers. **Left-click** a number to go there. **Right-click** that same number to **name** it, pick an **icon**, or set **Tile**, **Scroll**, or **Float**. Those choices apply only to that workspace
 - If the active workspace has a name, it appears as a chip next to the numbers
-- **Assign by monitor** — with spread on, **ASSIGNED WORKSPACES** lists every screen that is on and not mirroring. Tap a digit to pin that workspace to the screen. A workspace you leave unassigned still shows on the screen where it currently lives, dimmed
+- **Assign by monitor** — with spread on, **ASSIGNED WORKSPACES** lists every screen that is on and not mirroring. Tap a digit to pin that workspace to the screen. A workspace you leave unassigned still shows on the screen where it currently lives, dimmed. Assignment comes from [Titanium-Mothy](https://github.com/Titanium-Mothy)
 - **Split evenly** rebuilds the automatic split (primary first) and replaces a custom plan
 - Turning the toggle off restores Omarchy's stock workspace widget and leaves windows where they are
 
@@ -114,7 +114,9 @@ omarchy plugin update im0001gt.screens --yes
 omarchy restart shell
 ```
 
-**1.12.0** is the Omarchy 4.0.3 fix, plus two older holes. The shell no longer lets a third-party service call `barWidgetRegistry.register()`, so spreading workspaces now ships as a generated companion plugin instead of a runtime registration. Unplugging the last external display re-enables the laptop panel, even if Hyprland briefly reports zero outputs, without reloading Hyprland over and over (that was leaving USB-C DP dongles stuck in USB-only mode so the external never came back). Apply/Keep/Revert keeps the Screens panel open across layout remaps (including scale on another display) until you click outside it. HDR Auto no longer writes the luminance / Display P3 metadata that washed out Chromium and Electron. Pixel Care dims the bar layer window itself (Omarchy 4.0.3 no longer lets a plugin reach `moduleSlots`). Hover still lifts it. **Night Light** (Kelvin slider + on/off) and **All monitors** brightness come from [sunshine144](https://github.com/sunshine144).
+**1.12.0** is the Omarchy 4.0.3 fix, plus two older holes. The shell no longer lets a third-party service call `barWidgetRegistry.register()`, so spreading workspaces now ships as a generated companion plugin instead of a runtime registration. Unplugging the last external display re-enables the laptop panel, even if Hyprland briefly reports zero outputs, without reloading Hyprland over and over (that was leaving USB-C DP dongles stuck in USB-only mode so the external never came back). Apply/Keep/Revert keeps the Screens panel open across layout remaps (including scale on another display) until you click outside it. HDR Auto no longer writes the luminance / Display P3 metadata that washed out Chromium and Electron. Pixel Care dims the bar layer window itself (Omarchy 4.0.3 no longer lets a plugin reach `moduleSlots`). Hover still lifts it. **Night Light** (Kelvin slider + on/off) and **All monitors** brightness come from [sunshine144](https://github.com/sunshine144). **Assign by monitor** comes from [Titanium-Mothy](https://github.com/Titanium-Mothy).
+
+**1.12.1** keeps HDR Off from writing a bare `cm = "hdr"` line, clamps stray workspaces after dock/resume, and adds per-screen workspace pinning. Apply/Keep sits in a sticky footer. Sliders ignore the wheel unless the pointer is on the track.
 
 ## Uninstall
 
@@ -172,6 +174,8 @@ The repo root **is** the plugin. That is what `omarchy plugin add` and `omarchy 
 ## Credits
 
 **Night Light** (Kelvin slider and on/off) and **All monitors** brightness were contributed by [sunshine144](https://github.com/sunshine144).
+
+**Assign by monitor** (tap 1–10 onto each screen, Split evenly, unassigned digits stay dimmed on the bar) was contributed by [Titanium-Mothy](https://github.com/Titanium-Mothy).
 
 ## License
 

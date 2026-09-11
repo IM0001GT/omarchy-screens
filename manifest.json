@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "im0001gt.screens",
   "name": "Screens",
-  "version": "1.12.0",
+  "version": "1.12.1",
   "author": "IM0001GT",
   "license": "MIT",
   "homepage": "https://github.com/IM0001GT/omarchy-screens",
@@ -17,7 +17,7 @@
   },
   "barWidget": {
     "displayName": "Screens",
-    "description": "Arrange monitors with snap, then set brightness, text size, refresh, HDR, and VRR. Optionally dim the bar and spread workspaces 1–10 with names and icons.",
+    "description": "Arrange monitors with snap, then set brightness, text size, refresh, HDR, and VRR. Optionally dim the bar and pin workspaces 1–10 per screen.",
     "category": "Hardware",
     "defaultSection": "right",
     "allowMultiple": false
