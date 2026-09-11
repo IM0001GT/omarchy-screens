@@ -1,4 +1,5 @@
 import QtQuick
+import qs.Ui
 import qs.Commons
 
 // PanelSlider, but wheel only changes the value when the pointer is on the
