@@ -1794,7 +1794,7 @@ Panel {
                 }
               }
 
-              ScreensSlider {
+              WheelSafeSlider {
                 width: parent.width
                 bar: root.bar
                 minimum: 0
@@ -2769,7 +2769,7 @@ Panel {
                     }
                   }
 
-                  ScreensSlider {
+                  WheelSafeSlider {
                     width: parent.width
                     bar: root.bar
                     minimum: 0.8
@@ -2824,7 +2824,7 @@ Panel {
                     }
                   }
 
-                  ScreensSlider {
+                  WheelSafeSlider {
                     width: parent.width
                     bar: root.bar
                     minimum: 0.5
@@ -2869,7 +2869,7 @@ Panel {
                     }
                   }
 
-                  ScreensSlider {
+                  WheelSafeSlider {
                     width: parent.width
                     bar: root.bar
                     minimum: 0
@@ -2924,7 +2924,7 @@ Panel {
                     }
                   }
 
-                  ScreensSlider {
+                  WheelSafeSlider {
                     width: parent.width
                     bar: root.bar
                     minimum: 80
@@ -3018,7 +3018,7 @@ Panel {
                 }
               }
 
-              ScreensSlider {
+              WheelSafeSlider {
                 id: brightnessSlider
                 width: parent.width
                 bar: root.bar
@@ -3088,7 +3088,7 @@ Panel {
                 }
               }
 
-              ScreensSlider {
+              WheelSafeSlider {
                 id: nightlightSlider
                 width: parent.width
                 bar: root.bar
@@ -3136,7 +3136,7 @@ Panel {
                 }
               }
 
-              ScreensSlider {
+              WheelSafeSlider {
                 id: textSizeSlider
                 width: parent.width
                 bar: root.bar
@@ -3189,7 +3189,7 @@ Panel {
                 }
               }
 
-              ScreensSlider {
+              WheelSafeSlider {
                 width: parent.width
                 bar: root.bar
                 minimum: 1.0
