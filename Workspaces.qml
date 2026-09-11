@@ -40,14 +40,46 @@ BarWidget {
     return ""
   }
 
+  function assignedIds() {
+    var mons = (root.assignment && root.assignment.monitors) ? root.assignment.monitors : []
+    var all = []
+    var i, j
+    for (i = 0; i < mons.length; i++) {
+      var ids = (mons[i] && mons[i].ids) || []
+      for (j = 0; j < ids.length; j++) {
+        if (all.indexOf(ids[j]) === -1) all.push(ids[j])
+      }
+    }
+    return all
+  }
+
+  function isAssignedId(id) {
+    return root.assignedIds().indexOf(id) !== -1
+  }
+
   function workspaceIds() {
     var mons = (root.assignment && root.assignment.monitors) ? root.assignment.monitors : []
     var i
     if (root.assignment && root.assignment.enabled) {
+      var here = []
       for (i = 0; i < mons.length; i++) {
-        if (mons[i] && mons[i].name === root.barScreenName)
-          return mons[i].ids || []
+        if (mons[i] && mons[i].name === root.barScreenName) {
+          here = (mons[i].ids || []).slice()
+          break
+        }
       }
+      var assigned = root.assignedIds()
+      var live = Hyprland.workspaces.values
+      for (i = 0; i < live.length; i++) {
+        var wid = live[i].id
+        if (wid > 0 && wid <= 10
+            && assigned.indexOf(wid) === -1
+            && here.indexOf(wid) === -1
+            && root.workspaceMonitorName(live[i]) === root.barScreenName)
+          here.push(wid)
+      }
+      here.sort(function(a, b) { return a - b })
+      return here
     }
     var ids = []
     var values = Hyprland.workspaces.values
@@ -183,12 +215,17 @@ BarWidget {
         readonly property var workspace: root.workspaceById(modelData)
         readonly property bool occupied: workspace !== null && workspace.toplevels.values.length > 0
         readonly property bool focused: Hyprland.focusedWorkspace !== null && Hyprland.focusedWorkspace.id === modelData
+        readonly property bool unassignedHere: root.assignment && !!root.assignment.enabled && !root.isAssignedId(modelData)
         readonly property string cellText: Model.workspaceBarText(root.assignment, modelData, focused)
         readonly property real cellWidth: root.vertical ? root.barSize : Style.space(20)
         readonly property string tooltipText: {
           var lab = Model.workspaceLabelOf(root.assignment, modelData)
           var bits = ["Left: go there", "Right: name, icon, layout"]
           if (lab.name) bits.unshift(lab.name)
+          if (cell.unassignedHere) {
+            bits.unshift("Unassigned — lives here; left-click to bring up")
+            bits[1] = "Right: name, icon, layout"
+          }
           return bits.join(" · ")
         }
 
@@ -203,7 +240,7 @@ BarWidget {
         implicitHeight: root.barSize
         width: implicitWidth
         height: implicitHeight
-        opacity: occupied || focused ? 1 : 0.5
+        opacity: cell.unassignedHere ? 0.3 : (occupied || focused ? 1 : 0.5)
         Layout.fillWidth: false
         Layout.minimumWidth: implicitWidth
         Layout.preferredWidth: implicitWidth

@@ -676,7 +676,10 @@ Panel {
     mutateSelected(function(m) {
       m.hdrMode = n
       m.hdr = n === 2
-      if (n === 0) return
+      if (n === 0) {
+        if (m.cm === "hdr" || m.cm === "hdredid") m.cm = "srgb"
+        return
+      }
       var capable = Number(m.bitdepthCapable) >= 10 ? 10 : 8
       if (Number(m.bitdepth) !== 8 && Number(m.bitdepth) !== 10)
         m.bitdepth = capable
@@ -709,6 +712,8 @@ Panel {
 
   function setHdrCm(value) {
     var cm = String(value || "srgb")
+    if ((cm === "hdr" || cm === "hdredid") && Model.hdrModeOf(root.selected) === 0)
+      root.setHdrMode(2)
     mutateSelected(function(m) { m.cm = cm })
   }
 
@@ -919,6 +924,87 @@ Panel {
 
   function syncWorkspaces() {
     root.runStore(["workspaces", "sync"])
+  }
+
+  function clonePlan(plan) {
+    var out = []
+    for (var i = 0; i < plan.length; i++) {
+      var p = plan[i]
+      out.push({
+        name: p.name,
+        identity: p.identity || "",
+        label: p.label || "",
+        ids: (p.ids || []).slice(),
+        first: p.first,
+        last: p.last
+      })
+    }
+    return out
+  }
+
+  function assignedWorkspaceIds(mon) {
+    if (!mon) return []
+    var p = Model.planForMonitor(root.workspacePlan, mon)
+    return (p && p.ids) ? p.ids : []
+  }
+
+  function workspaceAssignedTo(mon, id) {
+    return root.assignedWorkspaceIds(mon).indexOf(id) !== -1
+  }
+
+  function workspaceHolderId(id) {
+    var list = root.monitors
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i].enabled) continue
+      if (root.workspaceAssignedTo(list[i], id)) return list[i].name
+    }
+    return ""
+  }
+
+  function unassignedWorkspaceIds() {
+    var out = []
+    for (var id = 1; id <= 10; id++) {
+      if (!root.workspaceHolderId(id)) out.push(id)
+    }
+    return out
+  }
+
+  function toggleWorkspaceAssignment(mon, id) {
+    if (!mon || !id) return
+    var next = root.clonePlan(root.workspacePlan)
+    var target = Model.planForMonitor(next, mon)
+    if (!target) {
+      target = { name: mon.name, identity: mon.identity || "", label: mon.label || mon.name, ids: [] }
+      next.push(target)
+    }
+    var idx = target.ids.indexOf(id)
+    if (idx >= 0) {
+      target.ids.splice(idx, 1)
+    } else {
+      target.ids.push(id)
+      for (var i = 0; i < next.length; i++) {
+        if (next[i] === target) continue
+        var k = (next[i].ids || []).indexOf(id)
+        if (k >= 0) next[i].ids.splice(k, 1)
+      }
+      target.ids.sort(function(a, b) { return a - b })
+    }
+    root.pushWorkspacePlan(next)
+  }
+
+  function autoSplitWorkspaces() {
+    root.runStore(["workspaces", "auto"])
+  }
+
+  function pushWorkspacePlan(plan) {
+    var payload = []
+    for (var i = 0; i < root.monitors.length; i++) {
+      var m = root.monitors[i]
+      if (!m.enabled) continue
+      var p = Model.planForMonitor(plan, m)
+      payload.push({ name: m.name, ids: (p && p.ids) ? p.ids : [] })
+    }
+    root.runStore(["workspaces", "assign", JSON.stringify(payload)])
   }
 
   function setWorkspaceLayout(id, mode) {
@@ -2317,6 +2403,158 @@ Panel {
             foreground: root.bar.foreground
             fontFamily: root.bar.fontFamily
             onClicked: root.setManageWorkspaces(!root.manageWorkspaces)
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.space(8)
+            visible: root.manageWorkspaces
+
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(wsHeader.implicitHeight, wsHeaderNote.implicitHeight)
+
+              PanelSectionHeader {
+                id: wsHeader
+                text: "ASSIGNED WORKSPACES"
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Text {
+                id: wsHeaderNote
+                text: "tap a digit to place it"
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+              }
+            }
+
+            Repeater {
+              model: root.monitors.length
+
+              Item {
+                id: wsRow
+                required property int index
+                readonly property var mon: root.monitors[index]
+                readonly property bool rowVisible: root.manageWorkspaces && !!(mon && mon.enabled)
+                width: parent.width
+                implicitHeight: rowVisible ? Math.max(wsName.implicitHeight, wsDigits.implicitHeight) : 0
+                visible: rowVisible
+
+                Text {
+                  id: wsName
+                  text: wsRow.mon ? (wsRow.mon.label || wsRow.mon.name) : ""
+                  color: root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  elide: Text.ElideRight
+                  width: Style.space(96)
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Flow {
+                  id: wsDigits
+                  anchors.left: wsName.right
+                  anchors.leftMargin: Style.space(8)
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(3)
+
+                  Repeater {
+                    model: 10
+
+                    Item {
+                      id: wsCell
+                      required property int index
+                      readonly property int wid: index + 1
+                      readonly property var mon: wsRow.mon
+                      readonly property bool assignedHere: mon ? root.workspaceAssignedTo(mon, wid) : false
+                      readonly property bool dimmed: {
+                        if (!mon || assignedHere) return false
+                        var holder = root.workspaceHolderId(wid)
+                        return holder !== "" && holder !== (mon ? mon.name : "")
+                      }
+                      width: Style.space(16)
+                      height: Style.space(16)
+
+                      Rectangle {
+                        anchors.fill: parent
+                        radius: Style.space(2)
+                        color: wsCell.assignedHere
+                          ? Util.alpha(Color.accent, 0.9)
+                          : (wsCell.dimmed ? "transparent" : Util.alpha(root.bar.foreground, 0.12))
+                        border.width: wsCell.assignedHere ? 0 : 1
+                        border.color: Util.alpha(root.bar.foreground, wsCell.dimmed ? 0.16 : 0.3)
+                      }
+
+                      Text {
+                        anchors.centerIn: parent
+                        text: Model.workspaceDigit(wsCell.wid)
+                        color: wsCell.assignedHere
+                          ? Color.background
+                          : (wsCell.dimmed ? Qt.darker(root.bar.foreground, 1.45) : root.bar.foreground)
+                        font.family: root.bar.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: wsCell.assignedHere
+                      }
+
+                      MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: { if (wsCell.mon) root.toggleWorkspaceAssignment(wsCell.mon, wsCell.wid) }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(wsUnassigned.implicitHeight, splitEvenly.implicitHeight)
+
+              Text {
+                id: wsUnassigned
+                anchors.left: parent.left
+                anchors.right: splitEvenly.left
+                anchors.rightMargin: Style.space(8)
+                anchors.verticalCenter: parent.verticalCenter
+                wrapMode: Text.Wrap
+                text: {
+                  var ids = root.unassignedWorkspaceIds()
+                  if (!ids.length) return "All 1–10 assigned."
+                  if (ids.length === 10) return "No workspaces assigned — they show on the screen where they currently live."
+                  return "Unassigned: " + ids.map(Model.workspaceDigit).join(", ")
+                    + " — still shown on the screen where they live."
+                }
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Button {
+                id: splitEvenly
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Split evenly"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(4)
+                onClicked: root.autoSplitWorkspaces()
+              }
+            }
           }
 
           PanelSeparator { foreground: root.bar.foreground }

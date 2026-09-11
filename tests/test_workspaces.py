@@ -45,7 +45,12 @@ class SplitCounts(unittest.TestCase):
 
 class WorkspacePlan(unittest.TestCase):
     def setUp(self):
+        import tempfile
         self.ctl = load_ctl()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ctl.WORKSPACES_JSON = os.path.join(self.tmp.name, "workspaces.json")
+        self.ctl.PROFILES_PATH = os.path.join(self.tmp.name, "profiles.json")
+        self.ctl.BACKUP_DIR = self.tmp.name
         self.left = {
             "name": "DP-4",
             "description": "HYC CO. LTD. DUAL-DVI",
@@ -66,6 +71,9 @@ class WorkspacePlan(unittest.TestCase):
             "identity": "desc:LG Electronics LG TV SSCR2 0x01010101",
             "mirror": "",
         }
+
+    def tearDown(self):
+        self.tmp.cleanup()
 
     def test_primary_gets_first_half(self):
         plan = self.ctl.workspace_plan([self.left, self.right], self.right["identity"])
@@ -97,6 +105,33 @@ class WorkspacePlan(unittest.TestCase):
         joined = "\n".join(lines)
         self.assertIn("desc:LG Electronics LG TV SSCR2 0x01010101", joined)
         self.assertIn("desc:HYC CO. LTD. DUAL-DVI", joined)
+
+    def test_custom_plan_is_kept_on_write(self):
+        self.ctl.write_workspaces_json(True, [
+            {"name": "HDMI-A-1", "identity": self.right["identity"], "ids": [1, 2, 10]},
+            {"name": "DP-4", "identity": self.left["identity"], "ids": [3, 4]},
+        ], {})
+        plan = self.ctl.plan_for_write([self.left, self.right])
+        by_name = {p["name"]: p["ids"] for p in plan}
+        self.assertEqual(by_name["HDMI-A-1"], [1, 2, 10])
+        self.assertEqual(by_name["DP-4"], [3, 4])
+
+    def test_normalize_plan_rejects_duplicates(self):
+        plan, errors = self.ctl.normalize_plan(
+            [self.left, self.right],
+            [
+                {"name": "DP-4", "ids": [1, 2]},
+                {"name": "HDMI-A-1", "ids": [2, 3]},
+            ],
+        )
+        self.assertTrue(errors)
+        self.assertIn("more than one screen", " ".join(errors))
+
+    def test_clamp_stray_focus_workspace(self):
+        self.assertEqual(self.ctl.clamp_focus_workspace("11", [6, 7, 8, 9, 10]), "6")
+        self.assertEqual(self.ctl.clamp_focus_workspace("7", [6, 7, 8, 9, 10]), "7")
+        self.assertEqual(self.ctl.clamp_focus_workspace("11", []), "")
+        self.assertEqual(self.ctl.clamp_focus_workspace("3", []), "3")
 
 
 class LayoutNames(unittest.TestCase):
@@ -599,6 +634,26 @@ class ColorAndScale(unittest.TestCase):
         self.assertEqual(self.ctl.clean_cm("adobe"), "adobe")
         self.assertEqual(self.ctl.clean_cm("hdr"), "hdr")
         self.assertEqual(self.ctl.clean_cm("nope"), "srgb")
+
+    def test_hdr_off_does_not_write_bare_hdr_cm(self):
+        mon = {
+            "name": "DP-1",
+            "description": "Dell",
+            "mode": "3840x2160@60",
+            "x": 0,
+            "y": 0,
+            "scale": 1,
+            "enabled": True,
+            "hdrMode": 0,
+            "cm": "hdr",
+        }
+        line = self.ctl.monitor_lua(mon, set())
+        self.assertNotIn('cm = "hdr"', line)
+        self.assertNotIn('cm = "hdredid"', line)
+        self.assertNotIn("supports_hdr", line)
+        cleaned = self.ctl.sanitize_monitor(mon, set())
+        self.assertEqual(cleaned["cm"], "srgb")
+        self.assertEqual(cleaned["hdrMode"], 0)
 
     def test_scale_keeps_one_thirty_three(self):
         self.assertEqual(self.ctl.clean_scale(1.33), 1.33)
