@@ -4,7 +4,7 @@
 Commands:
   state              JSON snapshot of monitors + saved profiles
   apply [--preview] <json>  write monitors.lua and reload
-  confirm            keep a previewed layout (cancel the 10s revert)
+  confirm            keep a previewed layout (cancel the 20s revert)
   revert             restore the layout from before the last preview
   enable <name>      turn a disabled connected output back on
   unmirror           clear mirrors and restore the last saved desk
