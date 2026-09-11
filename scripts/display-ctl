@@ -2046,25 +2046,34 @@ for key, dest in files.items():
             pass
 layouts = os.path.join(home, ".local/state/omarchy/workspace-layouts")
 for key, state in (manifest.get("workspaceLayouts") or {}).items():
-    dest = os.path.join(layouts, "%s.lua" % key)
-    src = os.path.join(orig, "workspace-layouts", "%s.lua" % key)
-    if state == "present" and os.path.isfile(src):
+    try:
+        n = int(str(key).strip())
+    except (TypeError, ValueError):
+        continue
+    if n < 1 or n > 10:
+        continue
+    name = "%d.lua" % n
+    dest = os.path.join(layouts, name)
+    src = os.path.join(orig, "workspace-layouts", name)
+    if state == "present" and os.path.isfile(src) and not os.path.islink(src):
         os.makedirs(layouts, exist_ok=True)
         shutil.copy2(src, dest)
-    elif state == "absent" and os.path.isfile(dest):
+    elif state == "absent" and os.path.isfile(dest) and not os.path.islink(dest):
         os.unlink(dest)
 link = manifest.get("brightnessLink") or {}
 path = os.path.expanduser(link.get("path") or "")
-if path:
+allowed = os.path.join(home, ".local/bin/omarchy-brightness-display")
+if path and os.path.normpath(path) == os.path.normpath(allowed):
     previous = link.get("previous") or ""
     if link.get("state") == "absent" and os.path.islink(path):
         os.unlink(path)
-    elif link.get("state") == "replaced" and previous:
+    elif link.get("state") == "replaced" and previous and "\0" not in previous:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.lexists(path):
             os.unlink(path)
         os.symlink(previous, path)
-companion = os.path.join(home, ".config/omarchy/plugins/im0001gt.screens.workspaces")
+plugins = os.path.join(home, ".config/omarchy/plugins")
+companion = os.path.join(plugins, "im0001gt.screens.workspaces")
 marker = os.path.join(companion, "generated-by-im0001gt.screens.json")
 try:
     owned = os.lstat(companion).st_uid == os.getuid()
@@ -2072,6 +2081,8 @@ except OSError:
     owned = False
 if (
     owned
+    and os.path.basename(companion) == "im0001gt.screens.workspaces"
+    and os.path.dirname(companion) == plugins
     and not os.path.islink(companion)
     and os.path.isdir(companion)
     and not os.path.islink(marker)
@@ -2175,22 +2186,28 @@ def restore_original():
     ):
         restored.append(SHELL_JSON)
     for key, state in (manifest.get("workspaceLayouts") or {}).items():
-        dest = os.path.join(LAYOUTS_DIR, "%s.lua" % key)
-        src = os.path.join(orig, "workspace-layouts", "%s.lua" % key)
-        if state == "present" and os.path.isfile(src):
+        name = workspace_layout_basename(key)
+        if not name:
+            continue
+        dest = os.path.join(LAYOUTS_DIR, name)
+        src = os.path.join(orig, "workspace-layouts", name)
+        if state == "present" and os.path.isfile(src) and not os.path.islink(src):
             os.makedirs(LAYOUTS_DIR, exist_ok=True)
             shutil.copy2(src, dest)
             restored.append(dest)
-        elif state == "absent" and os.path.isfile(dest):
+        elif state == "absent" and os.path.isfile(dest) and not os.path.islink(dest):
             os.unlink(dest)
             restored.append(dest)
     link = manifest.get("brightnessLink") or {}
     path = os.path.expanduser(link.get("path") or BRIGHTNESS_LINK)
+    expected = os.path.normpath(os.path.expanduser(BRIGHTNESS_LINK))
     previous = link.get("previous") or ""
-    if link.get("state") == "absent" and os.path.islink(path):
+    if os.path.normpath(path) != expected:
+        path = ""
+    if path and link.get("state") == "absent" and os.path.islink(path):
         os.unlink(path)
         restored.append(path)
-    elif link.get("state") == "replaced" and previous:
+    elif path and link.get("state") == "replaced" and previous and "\0" not in previous:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.lexists(path):
             os.unlink(path)
@@ -3515,6 +3532,12 @@ def pin_workspaces(plan):
         if not dest or not ids:
             continue
         for ws in ids:
+            try:
+                ws = int(ws)
+            except (TypeError, ValueError):
+                continue
+            if ws < 1 or ws > WORKSPACE_COUNT:
+                continue
             hypr_dispatch(
                 "hl.dsp.workspace.move({ workspace = %s, monitor = %s })"
                 % (lua_str(str(ws)), lua_str(dest))
@@ -3551,9 +3574,13 @@ def pin_and_save_plan(monitors):
 
 
 def plugin_present(plugin_id):
-    if not plugin_id:
+    text = str(plugin_id or "")
+    if not text or "/" in text or text in (".", ".."):
         return False
-    return os.path.isdir(os.path.join(os.path.expanduser("~/.config/omarchy/plugins"), plugin_id))
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", text):
+        return False
+    path = os.path.join(os.path.expanduser("~/.config/omarchy/plugins"), text)
+    return is_owned_real_dir(path)
 
 
 def bar_entry_id(entry):
@@ -3637,6 +3664,30 @@ def can_replace_workspaces_dir(path):
     return is_expected_workspaces_path(path) and is_generated_workspaces_plugin(path)
 
 
+def can_replace_workspaces_backup(path):
+    if not path or os.path.islink(path) or not os.path.isdir(path):
+        return False
+    dest = workspaces_plugin_dir()
+    expected = os.path.normpath(dest + ".old")
+    if os.path.normpath(path) != expected:
+        return False
+    if os.path.basename(path) != OUR_WS_WIDGET + ".old":
+        return False
+    if os.path.dirname(os.path.normpath(path)) != os.path.dirname(os.path.normpath(dest)):
+        return False
+    return is_generated_workspaces_plugin(path)
+
+
+def workspace_layout_basename(key):
+    try:
+        n = int(str(key).strip())
+    except (TypeError, ValueError):
+        return ""
+    if n < 1 or n > WORKSPACE_COUNT:
+        return ""
+    return "%d.lua" % n
+
+
 def screens_plugin_version():
     path = os.path.join(PLUGIN_DIR, "manifest.json")
     try:
@@ -3702,7 +3753,7 @@ def workspaces_plugin_files():
 
 
 def workspaces_plugin_matches(dest, files):
-    if not os.path.isdir(dest):
+    if not is_owned_real_dir(dest):
         return False
     try:
         existing = set(os.listdir(dest))
@@ -3749,15 +3800,16 @@ def install_workspaces_plugin():
         if os.path.lexists(dest):
             backup = dest + ".old"
             if os.path.lexists(backup):
-                if not can_replace_workspaces_dir(backup):
+                if not can_replace_workspaces_backup(backup):
                     return False
                 shutil.rmtree(backup)
             os.rename(dest, backup)
             moved_dest = True
         os.rename(staging, dest)
         staging = None
-        if backup and can_replace_workspaces_dir(backup):
-            shutil.rmtree(backup)
+        leftover = dest + ".old"
+        if can_replace_workspaces_backup(leftover):
+            shutil.rmtree(leftover)
         return True
     except OSError:
         if moved_dest and backup and not os.path.lexists(dest) and is_owned_real_dir(backup):

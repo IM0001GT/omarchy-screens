@@ -1063,6 +1063,21 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(backup, "foreign.txt")))
         self.assertTrue(self.ctl.is_generated_workspaces_plugin(dest))
 
+    def test_install_replaces_our_leftover_backup(self):
+        dest = self.companion_dir()
+        self.assertTrue(self.ctl.install_workspaces_plugin())
+        backup = dest + ".old"
+        os.rename(dest, backup)
+        self.assertTrue(self.ctl.is_generated_workspaces_plugin(backup))
+        self.assertTrue(self.ctl.install_workspaces_plugin())
+        self.assertTrue(self.ctl.is_generated_workspaces_plugin(dest))
+        self.assertFalse(os.path.lexists(backup))
+
+    def test_layout_basename_rejects_traversal(self):
+        self.assertEqual(self.ctl.workspace_layout_basename("3"), "3.lua")
+        self.assertEqual(self.ctl.workspace_layout_basename("../etc/passwd"), "")
+        self.assertEqual(self.ctl.workspace_layout_basename("11"), "")
+
     def test_restore_original_removes_generated_companion(self):
         self.ctl.install_workspaces_plugin()
         orig = os.path.join(self.tmp.name, "originals")
