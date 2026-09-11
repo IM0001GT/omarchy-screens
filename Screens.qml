@@ -2177,8 +2177,12 @@ Panel {
                 var ah = Math.max(1, height - pad * 2)
                 return Math.min(aw / box.w, ah / box.h)
               }
-              function cx(x) { return pad + (x - box.x) * fit }
-              function cy(y) { return pad + (y - box.y) * fit }
+              readonly property real drawnW: box.w * fit
+              readonly property real drawnH: box.h * fit
+              readonly property real ox: pad + Math.max(0, (width - pad * 2 - drawnW) / 2)
+              readonly property real oy: pad + Math.max(0, (height - pad * 2 - drawnH) / 2)
+              function cx(x) { return ox + (x - box.x) * fit }
+              function cy(y) { return oy + (y - box.y) * fit }
               function cw(w) { return Math.max(Style.space(36), w * fit) }
               function ch(h) { return Math.max(Style.space(24), h * fit) }
 
@@ -2410,63 +2414,54 @@ Panel {
             spacing: Style.space(8)
             visible: root.manageWorkspaces
 
-            Item {
+            Column {
               width: parent.width
-              implicitHeight: Math.max(wsHeader.implicitHeight, wsHeaderNote.implicitHeight)
+              spacing: Style.space(2)
 
               PanelSectionHeader {
-                id: wsHeader
                 text: "ASSIGNED WORKSPACES"
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
-                anchors.left: parent.left
-                anchors.verticalCenter: parent.verticalCenter
+                anchors.horizontalCenter: parent.horizontalCenter
               }
 
               Text {
-                id: wsHeaderNote
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
                 text: "tap a digit to place it"
                 color: Qt.darker(root.bar.foreground, 1.4)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
               }
             }
 
             Repeater {
               model: root.monitors.length
 
-              Item {
+              Column {
                 id: wsRow
                 required property int index
                 readonly property var mon: root.monitors[index]
-                readonly property bool rowVisible: root.manageWorkspaces && !!(mon && mon.enabled)
+                readonly property bool rowVisible: root.manageWorkspaces && !!(mon && mon.enabled && !mon.mirror)
                 width: parent.width
-                implicitHeight: rowVisible ? Math.max(wsName.implicitHeight, wsDigits.implicitHeight) : 0
+                spacing: Style.space(4)
                 visible: rowVisible
 
                 Text {
-                  id: wsName
+                  width: parent.width
+                  horizontalAlignment: Text.AlignHCenter
                   text: wsRow.mon ? (wsRow.mon.label || wsRow.mon.name) : ""
                   color: root.bar.foreground
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.caption
                   font.bold: true
                   elide: Text.ElideRight
-                  width: Style.space(96)
-                  anchors.left: parent.left
-                  anchors.verticalCenter: parent.verticalCenter
                 }
 
-                Flow {
-                  id: wsDigits
-                  anchors.left: wsName.right
-                  anchors.leftMargin: Style.space(8)
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(3)
+                Row {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  spacing: Style.space(4)
 
                   Repeater {
                     model: 10
@@ -2482,8 +2477,8 @@ Panel {
                         var holder = root.workspaceHolderId(wid)
                         return holder !== "" && holder !== (mon ? mon.name : "")
                       }
-                      width: Style.space(16)
-                      height: Style.space(16)
+                      width: Style.space(22)
+                      height: Style.space(22)
 
                       Rectangle {
                         anchors.fill: parent
@@ -2518,16 +2513,13 @@ Panel {
               }
             }
 
-            Item {
+            Column {
               width: parent.width
-              implicitHeight: Math.max(wsUnassigned.implicitHeight, splitEvenly.implicitHeight)
+              spacing: Style.space(6)
 
               Text {
-                id: wsUnassigned
-                anchors.left: parent.left
-                anchors.right: splitEvenly.left
-                anchors.rightMargin: Style.space(8)
-                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.Wrap
                 text: {
                   var ids = root.unassignedWorkspaceIds()
@@ -2542,9 +2534,7 @@ Panel {
               }
 
               Button {
-                id: splitEvenly
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
+                anchors.horizontalCenter: parent.horizontalCenter
                 text: "Split evenly"
                 fontSize: Style.font.caption
                 fontFamily: root.bar.fontFamily
