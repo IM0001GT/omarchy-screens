@@ -1154,6 +1154,36 @@ class DeskLayoutMerge(unittest.TestCase):
         self.assertEqual(len(store.get("lastLayout") or []), 1)
 
 
+class PrivateFilePublish(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.ctl = load_ctl()
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_write_uses_exclusive_staging_not_predictable_tmp(self):
+        dest = os.path.join(self.tmp.name, "profiles.json")
+        self.ctl.write_private_file(dest, "hello\n")
+        self.assertTrue(os.path.isfile(dest))
+        self.assertFalse(os.path.lexists(dest + ".tmp"))
+        leftovers = [n for n in os.listdir(self.tmp.name) if n.startswith(".screens-")]
+        self.assertEqual(leftovers, [])
+        with open(dest, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "hello\n")
+
+    def test_write_refuses_symlink_parent(self):
+        real = os.path.join(self.tmp.name, "real")
+        link = os.path.join(self.tmp.name, "link")
+        os.mkdir(real)
+        os.symlink(real, link)
+        dest = os.path.join(link, "out.json")
+        with self.assertRaises(OSError):
+            self.ctl.write_private_file(dest, "nope\n")
+        self.assertFalse(os.path.lexists(os.path.join(real, "out.json")))
+
+
 class PanelStateFile(unittest.TestCase):
     def setUp(self):
         import tempfile

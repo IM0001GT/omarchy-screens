@@ -35,6 +35,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1057,16 +1058,7 @@ def notice_seen():
 
 
 def save_store(store):
-    ensure_private_dir(BACKUP_DIR)
-    tmp = PROFILES_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(store, fh, indent=2)
-        fh.write("\n")
-    os.replace(tmp, PROFILES_PATH)
-    try:
-        os.chmod(PROFILES_PATH, 0o600)
-    except OSError:
-        pass
+    write_private_file(PROFILES_PATH, json.dumps(store, indent=2) + "\n")
 
 
 def find_profile(store, name):
@@ -1793,29 +1785,143 @@ def restore_helper_path():
     return os.path.join(BACKUP_DIR, "restore.sh")
 
 
+def is_owned_real_dir(path):
+    if not path or os.path.islink(path) or not os.path.isdir(path):
+        return False
+    try:
+        return os.lstat(path).st_uid == os.getuid()
+    except OSError:
+        return False
+
+
+def _nofollow_flag():
+    return getattr(os, "O_NOFOLLOW", 0)
+
+
+def _dir_flags():
+    return os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | _nofollow_flag()
+
+
+def trusted_root_for(path):
+    path = os.path.abspath(path)
+    home = os.path.abspath(os.path.expanduser("~"))
+    try:
+        if os.path.commonpath([path, home]) == home and is_owned_real_dir(home):
+            return home
+    except ValueError:
+        pass
+    cur = path
+    found = None
+    while True:
+        if is_owned_real_dir(cur):
+            found = cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    if not found:
+        raise OSError("no owned ancestor for %s" % path)
+    return found
+
+
+def ensure_owned_dir(path):
+    path = os.path.abspath(path)
+    root = trusted_root_for(path)
+    rel = os.path.relpath(path, root)
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        st = os.fstat(fd)
+        if st.st_uid != os.getuid() or not stat.S_ISDIR(st.st_mode):
+            raise OSError("untrusted root directory")
+        if rel == ".":
+            os.fchmod(fd, 0o700)
+            return
+        for part in rel.split(os.sep):
+            if part in ("", ".", ".."):
+                raise OSError("invalid path component")
+            try:
+                nxt = os.open(part, _dir_flags(), dir_fd=fd)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                nxt = os.open(part, _dir_flags(), dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+            st = os.fstat(fd)
+            if st.st_uid != os.getuid() or not stat.S_ISDIR(st.st_mode):
+                raise OSError("untrusted ancestor %s" % part)
+            os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
+
+
+def open_owned_dirfd(path):
+    path = os.path.abspath(path)
+    ensure_owned_dir(path)
+    fd = os.open(path, _dir_flags())
+    try:
+        st = os.fstat(fd)
+        if st.st_uid != os.getuid() or not stat.S_ISDIR(st.st_mode):
+            raise OSError("untrusted directory")
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
+
+
 def ensure_private_dir(path):
-    os.makedirs(path, mode=0o700, exist_ok=True)
-    try:
-        os.chmod(path, 0o700)
-    except OSError:
-        pass
+    ensure_owned_dir(path)
 
 
-def write_private_file(path, data):
-    ensure_private_dir(os.path.dirname(path) or ".")
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(data)
-        fh.flush()
-        try:
-            os.fsync(fh.fileno())
-        except OSError:
-            pass
-    os.replace(tmp, path)
+def write_private_file(path, data, mode=0o600):
+    if not isinstance(data, (bytes, bytearray)):
+        data = str(data).encode("utf-8")
+    path = os.path.abspath(path)
+    directory = os.path.dirname(path)
+    name = os.path.basename(path)
+    if not name or name in (".", "..") or os.sep in name:
+        raise OSError("invalid destination")
+    dir_fd = open_owned_dirfd(directory)
+    tmp_name = None
+    fd = None
     try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | _nofollow_flag()
+        for _ in range(32):
+            candidate = ".screens-%s" % os.urandom(8).hex()
+            try:
+                fd = os.open(candidate, flags, 0o600, dir_fd=dir_fd)
+                tmp_name = candidate
+                break
+            except FileExistsError:
+                continue
+        if fd is None:
+            raise OSError("could not create exclusive staging file")
+        st = os.fstat(fd)
+        if st.st_uid != os.getuid() or not stat.S_ISREG(st.st_mode):
+            raise OSError("staging file untrusted")
+        os.fchmod(fd, mode)
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short write")
+            view = view[written:]
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        os.replace(tmp_name, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        tmp_name = None
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if tmp_name:
+            try:
+                os.unlink(tmp_name, dir_fd=dir_fd)
+            except OSError:
+                pass
+        os.close(dir_fd)
     return True
 
 
@@ -2099,14 +2205,8 @@ print("Restored first-install Hyprland and Omarchy files from", orig)
 PY
 hyprctl reload >/dev/null 2>&1 || true
 """
-    ensure_private_dir(BACKUP_DIR)
     path = restore_helper_path()
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(script)
-    try:
-        os.chmod(path, 0o700)
-    except OSError:
-        pass
+    write_private_file(path, script, mode=0o700)
     return path
 
 
@@ -2272,11 +2372,7 @@ def write_monitors_lua(monitors, gdk=None):
         )
     ensure_original_backup(existing)
     backup_file(MONITORS_LUA)
-    os.makedirs(os.path.dirname(MONITORS_LUA), exist_ok=True)
-    tmp = MONITORS_LUA + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(text)
-    os.replace(tmp, MONITORS_LUA)
+    write_private_file(MONITORS_LUA, text)
     return text
 
 
@@ -2827,11 +2923,8 @@ def scale_bindings_block(up=None, down=None):
 
 
 def write_bindings_file(text):
-    os.makedirs(os.path.dirname(BINDINGS_LUA), exist_ok=True)
-    tmp = BINDINGS_LUA + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(text if text.endswith("\n") else text + "\n")
-    os.replace(tmp, BINDINGS_LUA)
+    payload = text if text.endswith("\n") else text + "\n"
+    write_private_file(BINDINGS_LUA, payload)
 
 
 def install_scale_bindings(up=None, down=None):
@@ -3136,9 +3229,7 @@ def clear_panel_state():
 def stash_revert_lua(prev_text):
     if os.path.isfile(REVERT_LUA) or not prev_text:
         return
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    with open(REVERT_LUA, "w", encoding="utf-8") as fh:
-        fh.write(prev_text)
+    write_private_file(REVERT_LUA, prev_text)
 
 
 def clear_pending_revert():
@@ -3265,8 +3356,7 @@ def apply(payload, gdk=None, preview=False):
     errors = config_errors()
     if errors:
         if prev:
-            with open(MONITORS_LUA, "w", encoding="utf-8") as fh:
-                fh.write(prev)
+            write_private_file(MONITORS_LUA, prev)
             reload_hypr()
         if preview:
             clear_pending_revert()
@@ -3473,7 +3563,6 @@ def parse_workspace_icon(raw):
 
 
 def write_workspaces_json(enabled, plan, layouts, labels=None):
-    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
     if labels is None:
         labels = workspace_labels_from()
     data = {
@@ -3483,11 +3572,7 @@ def write_workspaces_json(enabled, plan, layouts, labels=None):
         "monitors": plan or [],
         "labels": labels,
     }
-    tmp = WORKSPACES_JSON + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
-        fh.write("\n")
-    os.replace(tmp, WORKSPACES_JSON)
+    write_private_file(WORKSPACES_JSON, json.dumps(data, indent=2) + "\n")
 
 
 def plan_ids_for(plan, name):
@@ -3616,25 +3701,12 @@ def load_shell_json():
 
 
 def save_shell_json(data):
-    tmp = SHELL_JSON + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
-        fh.write("\n")
-    os.replace(tmp, SHELL_JSON)
+    write_private_file(SHELL_JSON, json.dumps(data, indent=2) + "\n")
 
 
 def workspaces_plugin_dir():
     parent = os.path.dirname(PLUGIN_DIR.rstrip(os.sep))
     return os.path.join(parent, OUR_WS_WIDGET)
-
-
-def is_owned_real_dir(path):
-    if not path or os.path.islink(path) or not os.path.isdir(path):
-        return False
-    try:
-        return os.lstat(path).st_uid == os.getuid()
-    except OSError:
-        return False
 
 
 def is_expected_workspaces_path(path):
@@ -3786,17 +3858,25 @@ def install_workspaces_plugin():
         os.chmod(staging, 0o700)
         if not is_owned_real_dir(staging):
             return False
-        for name, data in files.items():
-            if os.path.basename(name) != name or name in (".", ".."):
-                return False
-            path = os.path.join(staging, name)
-            with open(path, "wb") as fh:
-                fh.write(data)
-                fh.flush()
+        staging_fd = os.open(staging, _dir_flags())
+        try:
+            for name, data in files.items():
+                if os.path.basename(name) != name or name in (".", ".."):
+                    return False
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | _nofollow_flag()
+                fd = os.open(name, flags, 0o644, dir_fd=staging_fd)
                 try:
-                    os.fsync(fh.fileno())
-                except OSError:
-                    pass
+                    view = memoryview(data)
+                    while view:
+                        written = os.write(fd, view)
+                        if written <= 0:
+                            raise OSError("short write")
+                        view = view[written:]
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+        finally:
+            os.close(staging_fd)
         if os.path.lexists(dest):
             backup = dest + ".old"
             if os.path.lexists(backup):
@@ -3915,10 +3995,7 @@ def write_layout_file(ws_id, mode):
             'hl.window_rule({ name = %s, match = { workspace = "%d" }, float = true })'
             % (lua_str("im0001gt.screens-float-%d" % ws_id), ws_id)
         )
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(lines) + "\n")
-    os.replace(tmp, path)
+    write_private_file(path, "\n".join(lines) + "\n")
 
 
 def float_windows_on_workspace(ws_id, floating):
