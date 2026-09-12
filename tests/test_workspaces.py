@@ -964,7 +964,7 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
                 "schemaVersion": 1,
                 "id": "im0001gt.screens",
                 "name": "Screens",
-                "version": "1.12.0",
+                "version": "1.13.1",
                 "kinds": ["bar-widget", "service"],
                 "entryPoints": {"barWidget": "Screens.qml", "service": "Service.qml"},
             }, fh)
@@ -986,7 +986,7 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
         with open(manifest_path, encoding="utf-8") as fh:
             manifest = json.load(fh)
         self.assertEqual(manifest["id"], "im0001gt.screens.workspaces")
-        self.assertEqual(manifest["version"], "1.12.0")
+        self.assertEqual(manifest["version"], "1.13.1")
         self.assertEqual(manifest["kinds"], ["bar-widget"])
         self.assertEqual(manifest["entryPoints"]["barWidget"], "Workspaces.qml")
         self.assertEqual(manifest["barWidget"]["displayName"], "Screens workspaces")
@@ -1072,6 +1072,40 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
         self.assertTrue(self.ctl.install_workspaces_plugin())
         self.assertTrue(self.ctl.is_generated_workspaces_plugin(dest))
         self.assertFalse(os.path.lexists(backup))
+
+    def test_replace_and_remove_keep_parent_destination_fds(self):
+        dest = self.companion_dir()
+        self.assertTrue(self.ctl.install_workspaces_plugin())
+        with open(os.path.join(self.src, "Workspaces.qml"), "a", encoding="utf-8") as fh:
+            fh.write("\n// refresh\n")
+        orig_rename = self.ctl.os.rename
+
+        def guarded_rename(src, dst, *args, **kwargs):
+            if kwargs.get("src_dir_fd") is None or kwargs.get("dst_dir_fd") is None:
+                raise AssertionError("pathname rename: %s -> %s" % (src, dst))
+            return orig_rename(src, dst, *args, **kwargs)
+
+        self.ctl.os.rename = guarded_rename
+        try:
+            self.assertTrue(self.ctl.install_workspaces_plugin())
+            self.assertTrue(self.ctl.is_generated_workspaces_plugin(dest))
+            self.assertFalse(os.path.lexists(dest + ".old"))
+            self.assertTrue(self.ctl.remove_workspaces_plugin())
+            self.assertFalse(os.path.lexists(dest))
+        finally:
+            self.ctl.os.rename = orig_rename
+
+    def test_remove_refuses_swapped_non_directory(self):
+        dest = self.companion_dir()
+        self.assertTrue(self.ctl.install_workspaces_plugin())
+        os.rename(dest, dest + ".keep")
+        with open(dest, "w", encoding="utf-8") as fh:
+            fh.write("not a plugin dir\n")
+        self.assertFalse(self.ctl.remove_workspaces_plugin())
+        self.assertTrue(os.path.isfile(dest))
+        os.unlink(dest)
+        os.rename(dest + ".keep", dest)
+        self.assertTrue(self.ctl.remove_workspaces_plugin())
 
     def test_layout_basename_rejects_traversal(self):
         self.assertEqual(self.ctl.workspace_layout_basename("3"), "3.lua")

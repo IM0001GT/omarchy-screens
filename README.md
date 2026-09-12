@@ -118,6 +118,8 @@ omarchy restart shell
 
 **1.13.0** adds per-screen workspace pinning on top of the 1.12 fixes. HDR Off no longer writes a bare `cm = "hdr"` line. Dock/resume no longer leaves a stray workspace like 11. Apply/Keep sits in a sticky footer. Sliders ignore the wheel unless the pointer is on the track. **Assign by monitor** comes from [Titanium-Mothy](https://github.com/Titanium-Mothy).
 
+**1.13.1** keeps the workspaces companion parent and destination directory descriptors open through rename and recursive cleanup, so a path swap between check and replace cannot redirect the delete.
+
 ## Uninstall
 
 Restore the pre-Screens files first, then remove the plugin:

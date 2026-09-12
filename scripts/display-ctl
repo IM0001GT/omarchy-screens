@@ -34,12 +34,11 @@ import glob
 import json
 import os
 import re
-import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 import time
+from shutil import which
 
 MONITORS_LUA = os.path.expanduser("~/.config/hypr/monitors.lua")
 BINDINGS_LUA = os.path.expanduser("~/.config/hypr/bindings.lua")
@@ -1347,14 +1346,13 @@ def set_internal_toggle(disabled, mon=None):
     if not disabled:
         if os.path.isfile(INTERNAL_TOGGLE):
             try:
-                os.unlink(INTERNAL_TOGGLE)
+                unlink_private(INTERNAL_TOGGLE)
             except OSError:
                 pass
         return
     name = clean_connector((mon or {}).get("name"))
     if not is_internal_panel(name):
         return
-    os.makedirs(os.path.dirname(INTERNAL_TOGGLE), exist_ok=True)
     write_private_file(
         INTERNAL_TOGGLE,
         "hl.monitor({ output = %s, disabled = true })\n" % lua_str(name),
@@ -1824,7 +1822,17 @@ def trusted_root_for(path):
     return found
 
 
-def ensure_owned_dir(path):
+def _close_fd(fd):
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def open_owned_dirfd(path):
+    """Open path by walking from a trusted ancestor. Keep this fd; do not re-lookup."""
     path = os.path.abspath(path)
     root = trusted_root_for(path)
     rel = os.path.relpath(path, root)
@@ -1835,7 +1843,9 @@ def ensure_owned_dir(path):
             raise OSError("untrusted root directory")
         if rel == ".":
             os.fchmod(fd, 0o700)
-            return
+            out = fd
+            fd = None
+            return out
         for part in rel.split(os.sep):
             if part in ("", ".", ".."):
                 raise OSError("invalid path component")
@@ -1853,22 +1863,15 @@ def ensure_owned_dir(path):
             if st.st_uid != os.getuid() or not stat.S_ISDIR(st.st_mode):
                 raise OSError("untrusted ancestor %s" % part)
             os.fchmod(fd, 0o700)
+        out = fd
+        fd = None
+        return out
     finally:
-        os.close(fd)
+        _close_fd(fd)
 
 
-def open_owned_dirfd(path):
-    path = os.path.abspath(path)
-    ensure_owned_dir(path)
-    fd = os.open(path, _dir_flags())
-    try:
-        st = os.fstat(fd)
-        if st.st_uid != os.getuid() or not stat.S_ISDIR(st.st_mode):
-            raise OSError("untrusted directory")
-    except Exception:
-        os.close(fd)
-        raise
-    return fd
+def ensure_owned_dir(path):
+    _close_fd(open_owned_dirfd(path))
 
 
 def ensure_private_dir(path):
@@ -1923,6 +1926,185 @@ def write_private_file(path, data, mode=0o600):
                 pass
         os.close(dir_fd)
     return True
+
+
+def _lexists_at(parent_fd, name):
+    try:
+        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _same_inode(fd, parent_fd, name):
+    st_fd = os.fstat(fd)
+    st_name = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    return (st_fd.st_dev, st_fd.st_ino) == (st_name.st_dev, st_name.st_ino)
+
+
+def _read_bytes_at(dir_fd, name):
+    flags = os.O_RDONLY | os.O_CLOEXEC | _nofollow_flag()
+    fd = os.open(name, flags, dir_fd=dir_fd)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError("not a regular file")
+        chunks = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _write_bytes_at(dir_fd, name, data, mode=0o644):
+    if os.path.basename(name) != name or name in (".", ".."):
+        raise OSError("invalid name")
+    if not isinstance(data, (bytes, bytearray)):
+        data = str(data).encode("utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | _nofollow_flag()
+    fd = os.open(name, flags, mode, dir_fd=dir_fd)
+    try:
+        st = os.fstat(fd)
+        if st.st_uid != os.getuid() or not stat.S_ISREG(st.st_mode):
+            raise OSError("staging file untrusted")
+        os.fchmod(fd, mode)
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short write")
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _mkdir_exclusive_at(parent_fd, prefix):
+    for _ in range(32):
+        name = ".%s.%s" % (prefix, os.urandom(8).hex())
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+        fd = os.open(name, _dir_flags(), dir_fd=parent_fd)
+        try:
+            st = os.fstat(fd)
+            if st.st_uid != os.getuid() or not stat.S_ISDIR(st.st_mode):
+                raise OSError("staging dir untrusted")
+            os.fchmod(fd, 0o700)
+            return name, fd
+        except Exception:
+            os.close(fd)
+            raise
+    raise OSError("could not create exclusive staging directory")
+
+
+def _rmtree_contents_fd(dir_fd):
+    """Delete children of an already-open directory. Never follows links."""
+    with os.scandir(dir_fd) as it:
+        names = [entry.name for entry in it]
+    for name in names:
+        if name in (".", ".."):
+            continue
+        try:
+            st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        except OSError:
+            continue
+        if stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode):
+            child = os.open(name, _dir_flags(), dir_fd=dir_fd)
+            try:
+                _rmtree_contents_fd(child)
+            finally:
+                os.close(child)
+            os.rmdir(name, dir_fd=dir_fd)
+        else:
+            os.unlink(name, dir_fd=dir_fd)
+
+
+def _rmdir_if_same(parent_fd, name, child_fd):
+    try:
+        if not _same_inode(child_fd, parent_fd, name):
+            raise OSError("directory entry swapped")
+    except FileNotFoundError:
+        return False
+    os.rmdir(name, dir_fd=parent_fd)
+    return True
+
+
+def _empty_and_rmdir_at(parent_fd, name, expected_fd):
+    """Empty expected_fd, then rmdir name only if it still is that inode."""
+    _rmtree_contents_fd(expected_fd)
+    _rmdir_if_same(parent_fd, name, expected_fd)
+
+
+def read_private_bytes(path):
+    path = os.path.abspath(path)
+    directory = os.path.dirname(path)
+    name = os.path.basename(path)
+    if not name or name in (".", "..") or os.sep in name:
+        raise OSError("invalid path")
+    dir_fd = open_owned_dirfd(directory)
+    try:
+        return _read_bytes_at(dir_fd, name)
+    finally:
+        os.close(dir_fd)
+
+
+def copy_private_file(src, dest, mode=0o600):
+    write_private_file(dest, read_private_bytes(src), mode=mode)
+    return True
+
+
+def unlink_private(path, missing_ok=True):
+    path = os.path.abspath(path)
+    directory = os.path.dirname(path)
+    name = os.path.basename(path)
+    if not name or name in (".", "..") or os.sep in name:
+        raise OSError("invalid path")
+    dir_fd = open_owned_dirfd(directory)
+    try:
+        os.unlink(name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        if not missing_ok:
+            raise
+    finally:
+        os.close(dir_fd)
+
+
+def replace_private_symlink(path, target):
+    if not target or "\0" in target:
+        raise OSError("invalid symlink target")
+    path = os.path.abspath(path)
+    directory = os.path.dirname(path)
+    name = os.path.basename(path)
+    if not name or name in (".", "..") or os.sep in name:
+        raise OSError("invalid path")
+    dir_fd = open_owned_dirfd(directory)
+    tmp = None
+    try:
+        for _ in range(32):
+            candidate = ".screens-link-%s" % os.urandom(8).hex()
+            try:
+                os.symlink(target, candidate, dir_fd=dir_fd)
+                tmp = candidate
+                break
+            except FileExistsError:
+                continue
+        if tmp is None:
+            raise OSError("could not create exclusive staging symlink")
+        os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        tmp = None
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp, dir_fd=dir_fd)
+            except OSError:
+                pass
+        os.close(dir_fd)
 
 
 def write_original_backup(text):
@@ -2131,11 +2313,130 @@ if [[ ! -f $MANIFEST ]]; then
   exit 2
 fi
 python3 - "$ORIG" "$MANIFEST" <<'PY'
-import json, os, shutil, sys
+import json, os, stat, sys
 orig, manifest_path = sys.argv[1], sys.argv[2]
-home = os.path.expanduser("~")
-with open(manifest_path, encoding="utf-8") as fh:
-    manifest = json.load(fh)
+home = os.path.abspath(os.path.expanduser("~"))
+NF = getattr(os, "O_NOFOLLOW", 0)
+DF = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | NF
+
+def close_fd(fd):
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+def dirfd(path):
+    path = os.path.abspath(path)
+    rel = os.path.relpath(path, home)
+    fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        if os.fstat(fd).st_uid != os.getuid():
+            raise OSError("untrusted home")
+        if rel == ".":
+            out, fd = fd, None
+            return out
+        for part in rel.split(os.sep):
+            if part in ("", ".", ".."):
+                raise OSError("invalid path")
+            try:
+                nxt = os.open(part, DF, dir_fd=fd)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                nxt = os.open(part, DF, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+            st = os.fstat(fd)
+            if st.st_uid != os.getuid() or not stat.S_ISDIR(st.st_mode):
+                raise OSError("untrusted")
+        out, fd = fd, None
+        return out
+    finally:
+        close_fd(fd)
+
+def read_at(path):
+    parent = dirfd(os.path.dirname(os.path.abspath(path)))
+    try:
+        fd = os.open(os.path.basename(path), os.O_RDONLY | os.O_CLOEXEC | NF, dir_fd=parent)
+        try:
+            chunks = []
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return b"".join(chunks)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(parent)
+
+def write_at(path, data):
+    parent = dirfd(os.path.dirname(os.path.abspath(path)))
+    name = os.path.basename(path)
+    tmp = fd = None
+    try:
+        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | NF
+        for _ in range(32):
+            candidate = ".screens-%s" % os.urandom(8).hex()
+            try:
+                fd = os.open(candidate, flags, 0o600, dir_fd=parent)
+                tmp = candidate
+                break
+            except FileExistsError:
+                continue
+        if fd is None:
+            raise OSError("staging")
+        view = memoryview(data)
+        while view:
+            n = os.write(fd, view)
+            view = view[n:]
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        os.replace(tmp, name, src_dir_fd=parent, dst_dir_fd=parent)
+        tmp = None
+    finally:
+        close_fd(fd)
+        if tmp:
+            try:
+                os.unlink(tmp, dir_fd=parent)
+            except OSError:
+                pass
+        os.close(parent)
+
+def unlink_at(path):
+    parent = dirfd(os.path.dirname(os.path.abspath(path)))
+    try:
+        os.unlink(os.path.basename(path), dir_fd=parent)
+    finally:
+        os.close(parent)
+
+def copy_at(src, dest):
+    write_at(dest, read_at(src))
+
+def rmtree_fd(dir_fd):
+    with os.scandir(dir_fd) as it:
+        names = [e.name for e in it]
+    for name in names:
+        if name in (".", ".."):
+            continue
+        st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        if stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode):
+            child = os.open(name, DF, dir_fd=dir_fd)
+            try:
+                rmtree_fd(child)
+            finally:
+                os.close(child)
+            os.rmdir(name, dir_fd=dir_fd)
+        else:
+            os.unlink(name, dir_fd=dir_fd)
+
+manifest = json.loads(read_at(manifest_path))
 files = {
     "monitors.lua": os.path.join(home, ".config/hypr/monitors.lua"),
     "bindings.lua": os.path.join(home, ".config/hypr/bindings.lua"),
@@ -2144,11 +2445,10 @@ files = {
 for key, dest in files.items():
     meta = (manifest.get("files") or {}).get(key) or {}
     src = os.path.join(orig, meta.get("name") or key)
-    if meta.get("present") and os.path.isfile(src):
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        shutil.copy2(src, dest)
-    elif meta and not meta.get("present") and os.path.isfile(dest) and key != "shell.json":
-        if key == "bindings.lua":
+    if meta.get("present"):
+        try:
+            copy_at(src, dest)
+        except OSError:
             pass
 layouts = os.path.join(home, ".local/state/omarchy/workspace-layouts")
 for key, state in (manifest.get("workspaceLayouts") or {}).items():
@@ -2161,46 +2461,82 @@ for key, state in (manifest.get("workspaceLayouts") or {}).items():
     name = "%d.lua" % n
     dest = os.path.join(layouts, name)
     src = os.path.join(orig, "workspace-layouts", name)
-    if state == "present" and os.path.isfile(src) and not os.path.islink(src):
-        os.makedirs(layouts, exist_ok=True)
-        shutil.copy2(src, dest)
-    elif state == "absent" and os.path.isfile(dest) and not os.path.islink(dest):
-        os.unlink(dest)
+    if state == "present":
+        try:
+            copy_at(src, dest)
+        except OSError:
+            pass
+    elif state == "absent":
+        try:
+            unlink_at(dest)
+        except OSError:
+            pass
 link = manifest.get("brightnessLink") or {}
 path = os.path.expanduser(link.get("path") or "")
 allowed = os.path.join(home, ".local/bin/omarchy-brightness-display")
 if path and os.path.normpath(path) == os.path.normpath(allowed):
     previous = link.get("previous") or ""
-    if link.get("state") == "absent" and os.path.islink(path):
-        os.unlink(path)
-    elif link.get("state") == "replaced" and previous and "\0" not in previous:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        if os.path.lexists(path):
-            os.unlink(path)
-        os.symlink(previous, path)
+    if link.get("state") == "absent":
+        try:
+            unlink_at(path)
+        except OSError:
+            pass
+    elif link.get("state") == "replaced" and previous and "\\0" not in previous:
+        parent = dirfd(os.path.dirname(path))
+        tmp = None
+        try:
+            for _ in range(32):
+                candidate = ".screens-link-%s" % os.urandom(8).hex()
+                try:
+                    os.symlink(previous, candidate, dir_fd=parent)
+                    tmp = candidate
+                    break
+                except FileExistsError:
+                    continue
+            if tmp:
+                os.replace(tmp, os.path.basename(path), src_dir_fd=parent, dst_dir_fd=parent)
+                tmp = None
+        except OSError:
+            pass
+        finally:
+            if tmp:
+                try:
+                    os.unlink(tmp, dir_fd=parent)
+                except OSError:
+                    pass
+            os.close(parent)
 plugins = os.path.join(home, ".config/omarchy/plugins")
-companion = os.path.join(plugins, "im0001gt.screens.workspaces")
-marker = os.path.join(companion, "generated-by-im0001gt.screens.json")
+parent_fd = dest_fd = None
 try:
-    owned = os.lstat(companion).st_uid == os.getuid()
-except OSError:
-    owned = False
-if (
-    owned
-    and os.path.basename(companion) == "im0001gt.screens.workspaces"
-    and os.path.dirname(companion) == plugins
-    and not os.path.islink(companion)
-    and os.path.isdir(companion)
-    and not os.path.islink(marker)
-    and os.path.isfile(marker)
-):
-    try:
-        with open(marker, encoding="utf-8") as fh:
-            data = json.load(fh)
+    parent_fd = dirfd(plugins)
+    dest_fd = os.open("im0001gt.screens.workspaces", DF, dir_fd=parent_fd)
+    st = os.fstat(dest_fd)
+    if st.st_uid == os.getuid() and stat.S_ISDIR(st.st_mode):
+        mfd = os.open("generated-by-im0001gt.screens.json", os.O_RDONLY | os.O_CLOEXEC | NF, dir_fd=dest_fd)
+        try:
+            raw = b""
+            while True:
+                chunk = os.read(mfd, 4096)
+                if not chunk:
+                    break
+                raw += chunk
+                if len(raw) > 8192:
+                    raw = b""
+                    break
+            data = json.loads(raw.decode("utf-8")) if raw else {}
+        finally:
+            os.close(mfd)
         if isinstance(data, dict) and data.get("generatedBy") == "im0001gt.screens":
-            shutil.rmtree(companion)
-    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
-        pass
+            rmtree_fd(dest_fd)
+            st_name = os.stat("im0001gt.screens.workspaces", dir_fd=parent_fd, follow_symlinks=False)
+            st_fd = os.fstat(dest_fd)
+            if (st_name.st_dev, st_name.st_ino) == (st_fd.st_dev, st_fd.st_ino):
+                os.rmdir("im0001gt.screens.workspaces", dir_fd=parent_fd)
+except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError, TypeError, AttributeError):
+    pass
+finally:
+    close_fd(dest_fd)
+    close_fd(parent_fd)
 print("Restored first-install Hyprland and Omarchy files from", orig)
 PY
 hyprctl reload >/dev/null 2>&1 || true
@@ -2236,21 +2572,26 @@ def backup_file(path):
     ensure_private_dir(BACKUP_DIR)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dest = os.path.join(BACKUP_DIR, "monitors.lua.%s" % stamp)
-    shutil.copy2(path, dest)
+    try:
+        copy_private_file(path, dest)
+    except OSError:
+        return
     old = sorted(glob.glob(os.path.join(BACKUP_DIR, STAMPED_BACKUP_GLOB)))
     for extra in old[:-8]:
         try:
-            os.unlink(extra)
+            unlink_private(extra)
         except OSError:
             pass
 
 
 def restore_stock_file(dest, src, present):
-    if present and os.path.isfile(src):
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        shutil.copy2(src, dest)
+    if not present:
+        return False
+    try:
+        copy_private_file(src, dest)
         return True
-    return False
+    except OSError:
+        return False
 
 
 def restore_original():
@@ -2264,8 +2605,7 @@ def restore_original():
     if os.path.isfile(monitors_src):
         if os.path.isfile(MONITORS_LUA):
             backup_file(MONITORS_LUA)
-        os.makedirs(os.path.dirname(MONITORS_LUA), exist_ok=True)
-        shutil.copy2(monitors_src, MONITORS_LUA)
+        copy_private_file(monitors_src, MONITORS_LUA)
         restored.append(MONITORS_LUA)
     files = manifest.get("files") or {}
     bindings_meta = files.get("bindings.lua") or {}
@@ -2292,11 +2632,10 @@ def restore_original():
         dest = os.path.join(LAYOUTS_DIR, name)
         src = os.path.join(orig, "workspace-layouts", name)
         if state == "present" and os.path.isfile(src) and not os.path.islink(src):
-            os.makedirs(LAYOUTS_DIR, exist_ok=True)
-            shutil.copy2(src, dest)
+            copy_private_file(src, dest)
             restored.append(dest)
         elif state == "absent" and os.path.isfile(dest) and not os.path.islink(dest):
-            os.unlink(dest)
+            unlink_private(dest)
             restored.append(dest)
     link = manifest.get("brightnessLink") or {}
     path = os.path.expanduser(link.get("path") or BRIGHTNESS_LINK)
@@ -2305,13 +2644,10 @@ def restore_original():
     if os.path.normpath(path) != expected:
         path = ""
     if path and link.get("state") == "absent" and os.path.islink(path):
-        os.unlink(path)
+        unlink_private(path)
         restored.append(path)
     elif path and link.get("state") == "replaced" and previous and "\0" not in previous:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        if os.path.lexists(path):
-            os.unlink(path)
-        os.symlink(previous, path)
+        replace_private_symlink(path, previous)
         restored.append(path)
     reload_hypr()
     if remove_workspaces_plugin():
@@ -2601,7 +2937,7 @@ def detect_hyprmoncfg():
     enabled = plugin_enabled(HYPRMONCFG_PLUGIN_ID) if plugin else False
     daemon_running = process_named(HYPRMONCFG_DAEMON)
     daemon_wanted = user_unit_wanted(HYPRMONCFG_UNIT)
-    package = bool(shutil.which(HYPRMONCFG_DAEMON) or shutil.which("hyprmoncfg"))
+    package = bool(which(HYPRMONCFG_DAEMON) or which("hyprmoncfg"))
     include = hyprmoncfg_include_active()
     status = hyprmoncfg_management_state()
     unmanaged = status is False or (status is None and hyprmoncfg_unmanaged_file() and not include)
@@ -2633,14 +2969,14 @@ def detect_hyprmoncfg():
         "include": include,
         "blocking": blocking,
         "present": present,
-        "canUnmanage": bool(shutil.which("hyprmoncfg")),
+        "canUnmanage": bool(which("hyprmoncfg")),
         "canRemove": bool(plugin or package),
         "message": conflict_message(info) if shown else "",
     }
 
 
 def detect_hyprmod():
-    installed = bool(shutil.which("hyprmod"))
+    installed = bool(which("hyprmod"))
     included = hyprmod_include_active()
     outputs = hyprmod_managed_outputs() if included else []
     managing = bool(included and outputs)
@@ -2717,7 +3053,7 @@ def public_conflict(info):
         "package": bool(info.get("package")),
         "blocking": blocking,
         "unmanaged": bool(info.get("unmanaged")),
-        "canUnmanage": bool(info.get("canUnmanage") or shutil.which("hyprmoncfg")),
+        "canUnmanage": bool(info.get("canUnmanage") or which("hyprmoncfg")),
         "canRemove": bool(info.get("canRemove") or info.get("plugin") or info.get("package")),
         "present": True,
         "message": info.get("message") or "",
@@ -3234,7 +3570,7 @@ def stash_revert_lua(prev_text):
 
 def clear_pending_revert():
     try:
-        os.remove(REVERT_LUA)
+        unlink_private(REVERT_LUA)
     except OSError:
         pass
     store = load_store()
@@ -3259,7 +3595,7 @@ def revert_layout():
             save_store(store)
         print(json.dumps(snapshot(), separators=(",", ":")))
         return 0
-    shutil.copyfile(REVERT_LUA, MONITORS_LUA)
+    copy_private_file(REVERT_LUA, MONITORS_LUA)
     clear_pending_revert()
     reload_hypr()
     print(json.dumps(snapshot(), separators=(",", ":")))
@@ -3296,7 +3632,7 @@ def handoff_hyprmoncfg(mode):
         print(json.dumps(snapshot(), separators=(",", ":")))
         return 0
     if action == "unmanage":
-        if shutil.which("hyprmoncfg"):
+        if which("hyprmoncfg"):
             run(["hyprmoncfg", "unmanage"], timeout=20)
         mark_hyprmoncfg_choice_seen()
         info = detect_conflicts()
@@ -3304,7 +3640,7 @@ def handoff_hyprmoncfg(mode):
             claim_monitors(force=True)
         print(json.dumps(snapshot(), separators=(",", ":")))
         return 0 if not detect_conflicts().get("blocking") else 1
-    if shutil.which("hyprmoncfg"):
+    if which("hyprmoncfg"):
         run(["hyprmoncfg", "unmanage"], timeout=20)
     run(["omarchy", "plugin", "remove", HYPRMONCFG_PLUGIN_ID], timeout=30)
     mark_hyprmoncfg_choice_seen()
@@ -3718,18 +4054,25 @@ def is_expected_workspaces_path(path):
 
 
 def is_generated_workspaces_plugin(path=None):
-    dest = path or workspaces_plugin_dir()
-    if not is_owned_real_dir(dest):
+    dest = os.path.normpath(path or workspaces_plugin_dir())
+    parent = os.path.dirname(dest)
+    name = os.path.basename(dest)
+    if not name or name in (".", ".."):
         return False
-    marker = os.path.join(dest, WORKSPACES_PLUGIN_MARKER)
-    if os.path.islink(marker) or not os.path.isfile(marker):
-        return False
+    parent_fd = None
+    dest_fd = None
     try:
-        with open(marker, encoding="utf-8") as fh:
-            data = json.load(fh)
-        return isinstance(data, dict) and data.get("generatedBy") == "im0001gt.screens"
-    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        parent_fd = os.open(parent, _dir_flags())
+        st = os.fstat(parent_fd)
+        if st.st_uid != os.getuid() or not stat.S_ISDIR(st.st_mode):
+            return False
+        dest_fd = os.open(name, _dir_flags(), dir_fd=parent_fd)
+        return _fd_is_generated_workspaces_plugin(dest_fd)
+    except OSError:
         return False
+    finally:
+        _close_fd(dest_fd)
+        _close_fd(parent_fd)
 
 
 def can_replace_workspaces_dir(path):
@@ -3824,19 +4167,65 @@ def workspaces_plugin_files():
     return files
 
 
-def workspaces_plugin_matches(dest, files):
-    if not is_owned_real_dir(dest):
+def _fd_is_generated_workspaces_plugin(dir_fd):
+    st = os.fstat(dir_fd)
+    if st.st_uid != os.getuid() or not stat.S_ISDIR(st.st_mode):
         return False
     try:
-        existing = set(os.listdir(dest))
+        flags = os.O_RDONLY | os.O_CLOEXEC | _nofollow_flag()
+        mfd = os.open(WORKSPACES_PLUGIN_MARKER, flags, dir_fd=dir_fd)
+    except OSError:
+        return False
+    try:
+        st = os.fstat(mfd)
+        if st.st_uid != os.getuid() or not stat.S_ISREG(st.st_mode):
+            return False
+        data = b""
+        while True:
+            chunk = os.read(mfd, 4096)
+            if not chunk:
+                break
+            data += chunk
+            if len(data) > 8192:
+                return False
+        parsed = json.loads(data.decode("utf-8"))
+        return isinstance(parsed, dict) and parsed.get("generatedBy") == "im0001gt.screens"
+    except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError, TypeError, AttributeError):
+        return False
+    finally:
+        os.close(mfd)
+
+
+def workspaces_plugin_matches_fd(dir_fd, files):
+    try:
+        existing = set(os.listdir(dir_fd))
     except OSError:
         return False
     if existing != set(files):
         return False
     for name, data in files.items():
-        if read_bytes(os.path.join(dest, name)) != data:
+        try:
+            if _read_bytes_at(dir_fd, name) != data:
+                return False
+        except OSError:
             return False
     return True
+
+
+def workspaces_plugin_matches(dest, files):
+    parent_fd = None
+    dest_fd = None
+    try:
+        if not is_expected_workspaces_path(dest):
+            return False
+        parent_fd = open_owned_dirfd(os.path.dirname(dest))
+        dest_fd = os.open(os.path.basename(dest), _dir_flags(), dir_fd=parent_fd)
+        return workspaces_plugin_matches_fd(dest_fd, files)
+    except OSError:
+        return False
+    finally:
+        _close_fd(dest_fd)
+        _close_fd(parent_fd)
 
 
 def install_workspaces_plugin():
@@ -3844,73 +4233,122 @@ def install_workspaces_plugin():
     if not is_expected_workspaces_path(dest):
         return False
     parent = os.path.dirname(dest)
-    if not is_owned_real_dir(parent):
+    dest_name = os.path.basename(dest)
+    backup_name = dest_name + ".old"
+    if dest_name != OUR_WS_WIDGET or backup_name != OUR_WS_WIDGET + ".old":
         return False
-    files = workspaces_plugin_files()
-    if workspaces_plugin_matches(dest, files):
-        return False
-    if os.path.lexists(dest) and not can_replace_workspaces_dir(dest):
-        return False
-    staging = tempfile.mkdtemp(prefix=".%s." % OUR_WS_WIDGET, dir=parent)
-    backup = None
+
+    parent_fd = None
+    dest_fd = None
+    staging_fd = None
+    backup_fd = None
+    staging_name = None
     moved_dest = False
+    published = False
     try:
-        os.chmod(staging, 0o700)
-        if not is_owned_real_dir(staging):
-            return False
-        staging_fd = os.open(staging, _dir_flags())
+        parent_fd = open_owned_dirfd(parent)
+        files = workspaces_plugin_files()
         try:
-            for name, data in files.items():
-                if os.path.basename(name) != name or name in (".", ".."):
+            dest_fd = os.open(dest_name, _dir_flags(), dir_fd=parent_fd)
+        except FileNotFoundError:
+            dest_fd = None
+        except OSError:
+            return False
+        if dest_fd is not None:
+            st = os.fstat(dest_fd)
+            if st.st_uid != os.getuid() or not stat.S_ISDIR(st.st_mode):
+                return False
+            if not _fd_is_generated_workspaces_plugin(dest_fd):
+                return False
+            if workspaces_plugin_matches_fd(dest_fd, files):
+                return False
+        elif _lexists_at(parent_fd, dest_name):
+            return False
+
+        staging_name, staging_fd = _mkdir_exclusive_at(parent_fd, OUR_WS_WIDGET)
+        for name, data in files.items():
+            _write_bytes_at(staging_fd, name, data, 0o644)
+        os.fsync(staging_fd)
+
+        if dest_fd is not None:
+            try:
+                backup_fd = os.open(backup_name, _dir_flags(), dir_fd=parent_fd)
+            except FileNotFoundError:
+                backup_fd = None
+            except OSError:
+                return False
+            if backup_fd is not None:
+                if not _fd_is_generated_workspaces_plugin(backup_fd):
                     return False
-                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | _nofollow_flag()
-                fd = os.open(name, flags, 0o644, dir_fd=staging_fd)
-                try:
-                    view = memoryview(data)
-                    while view:
-                        written = os.write(fd, view)
-                        if written <= 0:
-                            raise OSError("short write")
-                        view = view[written:]
-                    os.fsync(fd)
-                finally:
-                    os.close(fd)
-        finally:
-            os.close(staging_fd)
-        if os.path.lexists(dest):
-            backup = dest + ".old"
-            if os.path.lexists(backup):
-                if not can_replace_workspaces_backup(backup):
-                    return False
-                shutil.rmtree(backup)
-            os.rename(dest, backup)
+                _empty_and_rmdir_at(parent_fd, backup_name, backup_fd)
+                _close_fd(backup_fd)
+                backup_fd = None
+            if not _same_inode(dest_fd, parent_fd, dest_name):
+                return False
+            os.rename(dest_name, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
             moved_dest = True
-        os.rename(staging, dest)
-        staging = None
-        leftover = dest + ".old"
-        if can_replace_workspaces_backup(leftover):
-            shutil.rmtree(leftover)
+
+        os.rename(staging_name, dest_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        published = True
+        staging_name = None
+        leftover_fd = dest_fd
+        leftover_name = backup_name
+        if leftover_fd is None:
+            try:
+                leftover_fd = os.open(backup_name, _dir_flags(), dir_fd=parent_fd)
+                if not _fd_is_generated_workspaces_plugin(leftover_fd):
+                    _close_fd(leftover_fd)
+                    leftover_fd = None
+            except FileNotFoundError:
+                leftover_fd = None
+        if leftover_fd is not None:
+            try:
+                _empty_and_rmdir_at(parent_fd, leftover_name, leftover_fd)
+            except OSError:
+                pass
+            if leftover_fd is not dest_fd:
+                _close_fd(leftover_fd)
         return True
     except OSError:
-        if moved_dest and backup and not os.path.lexists(dest) and is_owned_real_dir(backup):
+        if moved_dest and not published and dest_fd is not None and parent_fd is not None:
             try:
-                os.rename(backup, dest)
+                if not _lexists_at(parent_fd, dest_name) and _same_inode(dest_fd, parent_fd, backup_name):
+                    os.rename(backup_name, dest_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
             except OSError:
                 pass
         return False
     finally:
-        if staging and is_owned_real_dir(staging):
-            base = os.path.basename(staging)
-            if base.startswith(".%s." % OUR_WS_WIDGET):
-                shutil.rmtree(staging)
+        if staging_fd is not None and staging_name and parent_fd is not None and not published:
+            try:
+                _empty_and_rmdir_at(parent_fd, staging_name, staging_fd)
+            except OSError:
+                pass
+        _close_fd(backup_fd)
+        _close_fd(dest_fd)
+        _close_fd(staging_fd)
+        _close_fd(parent_fd)
 
 
 def remove_workspaces_plugin():
     dest = workspaces_plugin_dir()
-    if not can_replace_workspaces_dir(dest):
+    if not is_expected_workspaces_path(dest):
         return False
-    shutil.rmtree(dest)
-    return True
+    parent = os.path.dirname(dest)
+    dest_name = os.path.basename(dest)
+    parent_fd = None
+    dest_fd = None
+    try:
+        parent_fd = open_owned_dirfd(parent)
+        dest_fd = os.open(dest_name, _dir_flags(), dir_fd=parent_fd)
+        if not _fd_is_generated_workspaces_plugin(dest_fd):
+            return False
+        _empty_and_rmdir_at(parent_fd, dest_name, dest_fd)
+        return True
+    except OSError:
+        return False
+    finally:
+        _close_fd(dest_fd)
+        _close_fd(parent_fd)
 
 
 def swap_bar_workspaces(enable):
@@ -3984,7 +4422,6 @@ def sync_workspaces():
 
 def write_layout_file(ws_id, mode):
     ensure_stock_backups()
-    os.makedirs(LAYOUTS_DIR, mode=0o700, exist_ok=True)
     path = os.path.join(LAYOUTS_DIR, "%d.lua" % ws_id)
     hypr_layout = "scrolling" if mode == "scroll" else "dwindle"
     lines = [
