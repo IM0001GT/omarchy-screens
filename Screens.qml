@@ -72,6 +72,8 @@ Panel {
   property int lastDisplayQuipIndex: 0
   property string lastDisplayQuip: ""
   property bool manageWorkspaces: false
+  property int workspacesTotal: 10
+  property bool splitEvenly: true
   property var workspacePlan: []
   property var workspaceLayouts: ({})
   property int layoutMenuWorkspace: 0
@@ -389,6 +391,8 @@ Panel {
     root.primaryId = (data && data.primary) ? String(data.primary) : ""
     root.hybridGpus = !!(data && data.hybridGpus)
     root.manageWorkspaces = !!(data && data.manageWorkspaces)
+    root.workspacesTotal = (data && data.workspacesTotal) ? data.workspacesTotal : 10
+    root.splitEvenly = !data || data.splitEvenly !== false
     root.workspacePlan = (data && data.workspacePlan) ? data.workspacePlan : []
     root.workspaceLayouts = (data && data.workspaceLayouts) ? data.workspaceLayouts : ({})
     root.oledGuard = !!(data && data.oledGuard)
@@ -964,7 +968,8 @@ Panel {
 
   function unassignedWorkspaceIds() {
     var out = []
-    for (var id = 1; id <= 10; id++) {
+    var total = root.workspacesTotal || 10
+    for (var id = 1; id <= total; id++) {
       if (!root.workspaceHolderId(id)) out.push(id)
     }
     return out
@@ -991,10 +996,6 @@ Panel {
       target.ids.sort(function(a, b) { return a - b })
     }
     root.pushWorkspacePlan(next)
-  }
-
-  function autoSplitWorkspaces() {
-    root.runStore(["workspaces", "auto"])
   }
 
   function pushWorkspacePlan(plan) {
@@ -1098,11 +1099,10 @@ Panel {
 
   function workspaceDescription() {
     var hint = "Right-click a number to name it, pick an icon, or set Tile, Scroll, or Float."
-    if (root.enabledCount <= 1)
-      return "Keep workspaces 1–10 on this screen. " + hint
-    if (root.enabledCount === 2)
-      return "Primary gets 1–5, the next screen gets 6–10. " + hint
-    return "Split ten workspaces across these screens. " + hint
+    var n = root.workspacesTotal || 10
+    if (root.splitEvenly)
+      return n + " workspaces total, split evenly across your screens (left to right, leftmost screen first). " + hint
+    return "Assign each of " + n + " workspaces to a screen below. " + hint
   }
 
   function identify() {
@@ -2366,6 +2366,51 @@ Panel {
               spacing: Style.space(2)
 
               PanelSectionHeader {
+                text: "TOTAL WORKSPACES — " + (root.workspacesTotal || 10)
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                anchors.horizontalCenter: parent.horizontalCenter
+              }
+
+              WheelSafeSlider {
+                width: parent.width
+                bar: root.bar
+                minimum: Math.max(1, root.enabledCount)
+                maximum: Math.min(Math.max(1, root.enabledCount) * 20, 90)
+                step: Math.max(1, root.enabledCount)
+                integer: true
+                value: root.workspacesTotal
+                onReleased: function(v) {
+                  var s = Math.max(1, root.enabledCount)
+                  var mx = Math.min(s * 20, 90)
+                  var n = Math.min(mx, Math.max(s, Math.round(v / s) * s))
+                  root.runStore(["workspaces", "total", String(n)])
+                }
+              }
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Split evenly"
+              description: root.splitEvenly
+                ? "Divide the workspaces equally across your screens."
+                : "Assign workspaces to screens by hand below."
+              checked: root.splitEvenly
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              onClicked: root.runStore(["workspaces", "even", root.splitEvenly ? "0" : "1"])
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(8)
+              visible: !root.splitEvenly
+
+            Column {
+              width: parent.width
+              spacing: Style.space(2)
+
+              PanelSectionHeader {
                 text: "ASSIGNED WORKSPACES"
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
@@ -2406,12 +2451,12 @@ Panel {
                   elide: Text.ElideRight
                 }
 
-                Row {
-                  anchors.horizontalCenter: parent.horizontalCenter
+                Flow {
+                  width: parent.width
                   spacing: Style.space(4)
 
                   Repeater {
-                    model: 10
+                    model: root.workspacesTotal
 
                     Item {
                       id: wsCell
@@ -2470,8 +2515,9 @@ Panel {
                 wrapMode: Text.Wrap
                 text: {
                   var ids = root.unassignedWorkspaceIds()
-                  if (!ids.length) return "All 1–10 assigned."
-                  if (ids.length === 10) return "No workspaces assigned — they show on the screen where they currently live."
+                  var total = root.workspacesTotal || 10
+                  if (!ids.length) return "All 1–" + total + " assigned."
+                  if (ids.length === total) return "No workspaces assigned — they show on the screen where they currently live."
                   return "Unassigned: " + ids.map(Model.workspaceDigit).join(", ")
                     + " — still shown on the screen where they live."
                 }
@@ -2479,18 +2525,7 @@ Panel {
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
               }
-
-              Button {
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: "Split evenly"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                horizontalPadding: Style.space(10)
-                verticalPadding: Style.space(4)
-                onClicked: root.autoSplitWorkspaces()
-              }
+            }
             }
           }
 

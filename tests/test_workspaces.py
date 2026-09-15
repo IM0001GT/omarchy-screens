@@ -75,11 +75,12 @@ class WorkspacePlan(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_primary_gets_first_half(self):
+    def test_leftmost_gets_first_half(self):
+        # Numbering is spatial (leftmost first); primary is ignored for the plan.
         plan = self.ctl.workspace_plan([self.left, self.right], self.right["identity"])
-        self.assertEqual(plan[0]["name"], "HDMI-A-1")
+        self.assertEqual(plan[0]["name"], "DP-4")       # x=0, leftmost
         self.assertEqual(plan[0]["ids"], [1, 2, 3, 4, 5])
-        self.assertEqual(plan[1]["name"], "DP-4")
+        self.assertEqual(plan[1]["name"], "HDMI-A-1")   # x=2560
         self.assertEqual(plan[1]["ids"], [6, 7, 8, 9, 10])
 
     def test_mirrors_are_skipped(self):
@@ -107,6 +108,8 @@ class WorkspacePlan(unittest.TestCase):
         self.assertIn("desc:HYC CO. LTD. DUAL-DVI", joined)
 
     def test_custom_plan_is_kept_on_write(self):
+        # A saved manual assignment is honoured only when splitEvenly is off.
+        self.ctl.save_store(dict(self.ctl.load_store(), splitEvenly=False))
         self.ctl.write_workspaces_json(True, [
             {"name": "HDMI-A-1", "identity": self.right["identity"], "ids": [1, 2, 10]},
             {"name": "DP-4", "identity": self.left["identity"], "ids": [3, 4]},
@@ -951,6 +954,9 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
         import tempfile
         self.ctl = load_ctl()
         self.tmp = tempfile.TemporaryDirectory()
+        # workspace_layout_basename() reads the managed total via workspace_total(),
+        # so isolate the store from the real profiles.json (default => total 10).
+        self.ctl.PROFILES_PATH = os.path.join(self.tmp.name, "profiles.json")
         self.plugins = os.path.join(self.tmp.name, "plugins")
         self.src = os.path.join(self.plugins, "im0001gt.screens")
         os.makedirs(self.src, exist_ok=True)
@@ -1263,6 +1269,119 @@ class PanelStateFile(unittest.TestCase):
         self.assertFalse(loaded["wanted"])
         self.assertFalse(loaded["pendingConfirm"])
         self.assertEqual(loaded["screen"], "")
+
+
+class TotalSplit(unittest.TestCase):
+    """Configurable total workspaces, split evenly across screens."""
+
+    def setUp(self):
+        import tempfile
+        self.ctl = load_ctl()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ctl.WORKSPACES_JSON = os.path.join(self.tmp.name, "workspaces.json")
+        self.ctl.PROFILES_PATH = os.path.join(self.tmp.name, "profiles.json")
+        self.ctl.BACKUP_DIR = self.tmp.name
+        self.left = {
+            "name": "DP-4", "description": "HYC CO. LTD. DUAL-DVI", "label": "HYC",
+            "enabled": True, "x": 0, "y": 226,
+            "identity": "desc:HYC CO. LTD. DUAL-DVI", "mirror": "",
+        }
+        self.right = {
+            "name": "HDMI-A-1", "description": "LG Electronics LG TV SSCR2 0x01010101",
+            "label": "LG TV", "enabled": True, "x": 2560, "y": 0,
+            "identity": "desc:LG Electronics LG TV SSCR2 0x01010101", "mirror": "",
+        }
+        self.mid = {
+            "name": "DP-2", "description": "Dell U2720Q", "label": "Dell",
+            "enabled": True, "x": 1280, "y": 0,
+            "identity": "desc:Dell U2720Q", "mirror": "",
+        }
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _store(self, **kw):
+        base = self.ctl.load_store()
+        base.update(kw)
+        self.ctl.save_store(base)
+
+    def test_default_is_ten_split_evenly(self):
+        # Backward-compat: no config => total 10, split evenly.
+        self.assertEqual(self.ctl.workspace_total(), 10)
+        self.assertTrue(self.ctl.split_evenly())
+        plan = self.ctl.workspace_plan([self.left, self.right], self.right["identity"])
+        self.assertEqual(plan[0]["name"], "DP-4")       # leftmost
+        self.assertEqual(plan[0]["ids"], [1, 2, 3, 4, 5])
+        self.assertEqual(plan[1]["ids"], [6, 7, 8, 9, 10])
+
+    def test_total_twenty_leftmost_first(self):
+        # primary is the right screen, but numbering follows physical order.
+        self._store(workspacesTotal=20, primary=self.right["identity"])
+        self.assertEqual(self.ctl.workspace_total(), 20)
+        plan = self.ctl.workspace_plan([self.left, self.right], self.right["identity"])
+        self.assertEqual(plan[0]["name"], "DP-4")       # x=0, leftmost
+        self.assertEqual(plan[0]["ids"], list(range(1, 11)))
+        self.assertEqual(plan[1]["name"], "HDMI-A-1")   # x=2560
+        self.assertEqual(plan[1]["ids"], list(range(11, 21)))
+
+    def test_total_thirtythree_three_elevens_by_position(self):
+        # primary set to the rightmost — must NOT change the spatial numbering.
+        self._store(workspacesTotal=33, primary=self.right["identity"])
+        mons = [self.right, self.mid, self.left]  # deliberately out of order
+        plan = self.ctl.workspace_plan(mons, self.right["identity"])
+        self.assertEqual([p["name"] for p in plan], ["DP-4", "DP-2", "HDMI-A-1"])
+        self.assertEqual([p["ids"] for p in plan],
+                         [list(range(1, 12)), list(range(12, 23)), list(range(23, 34))])
+
+    def test_manual_assignment_honoured_when_not_even(self):
+        self._store(workspacesTotal=20, splitEvenly=False,
+                    primary=self.right["identity"])
+        self.ctl.write_workspaces_json(True, [
+            {"name": "HDMI-A-1", "identity": self.right["identity"], "ids": [1, 2, 20]},
+            {"name": "DP-4", "identity": self.left["identity"], "ids": [11, 12]},
+        ], {})
+        plan = self.ctl.plan_for_write([self.left, self.right])
+        by_name = {p["name"]: p["ids"] for p in plan}
+        self.assertEqual(by_name["HDMI-A-1"], [1, 2, 20])
+        self.assertEqual(by_name["DP-4"], [11, 12])
+
+    def test_manual_assignment_ignored_when_even(self):
+        # splitEvenly True (default) => saved manual plan is ignored, auto wins.
+        self._store(workspacesTotal=20, primary=self.right["identity"])
+        self.ctl.write_workspaces_json(True, [
+            {"name": "HDMI-A-1", "identity": self.right["identity"], "ids": [1, 2, 20]},
+        ], {})
+        plan = self.ctl.plan_for_write([self.left, self.right])
+        by_name = {p["name"]: p["ids"] for p in plan}
+        # Auto spatial split wins: rightmost HDMI-A-1 gets the second block.
+        self.assertEqual(by_name["HDMI-A-1"], list(range(11, 21)))
+        self.assertEqual(by_name["DP-4"], list(range(1, 11)))
+
+    def test_validation_upper_bound_tracks_total(self):
+        self._store(workspacesTotal=20)
+        plan, errors = self.ctl.normalize_plan(
+            [self.left, self.right],
+            [{"name": "HDMI-A-1", "ids": [1, 20]}, {"name": "DP-4", "ids": [11, 12]}],
+        )
+        self.assertEqual(errors, [])
+        plan, errors = self.ctl.normalize_plan(
+            [self.left, self.right], [{"name": "HDMI-A-1", "ids": [21]}],
+        )
+        self.assertTrue(any("out of range 1-20" in e for e in errors))
+
+    def test_total_is_clamped_and_capped(self):
+        self._store(workspacesTotal=999)
+        self.assertEqual(self.ctl.workspace_total(), self.ctl.WORKSPACE_TOTAL_CAP)
+        self._store(workspacesTotal=0)
+        self.assertEqual(self.ctl.workspace_total(), 1)
+
+    def test_write_workspaces_json_uses_authoritative_total(self):
+        self._store(workspacesTotal=20)
+        # Even with an empty plan, the recorded total is the stored one.
+        self.ctl.write_workspaces_json(True, [], {})
+        with open(self.ctl.WORKSPACES_JSON, encoding="utf-8") as fh:
+            data = json.load(fh)
+        self.assertEqual(data["total"], 20)
 
 
 if __name__ == "__main__":

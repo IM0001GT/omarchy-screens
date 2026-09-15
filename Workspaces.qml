@@ -82,10 +82,11 @@ BarWidget {
       return here
     }
     var ids = []
+    var wsMax = (root.assignment && root.assignment.total) ? root.assignment.total : 10
     var values = Hyprland.workspaces.values
     for (i = 0; i < values.length; i++) {
       var id = values[i].id
-      if (id > 0 && id <= 10 && root.workspaceMonitorName(values[i]) === root.barScreenName
+      if (id > 0 && id <= wsMax && root.workspaceMonitorName(values[i]) === root.barScreenName
           && ids.indexOf(id) === -1)
         ids.push(id)
     }
