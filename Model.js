@@ -587,9 +587,12 @@ function planForMonitor(plan, mon) {
 }
 
 function workspaceId(id) {
+  // Any positive integer (was capped at 10); all-digits only, so a crafted
+  // string can never slip through into a rename/dispatch as a partial number.
   var text = String(id == null ? "" : id).trim()
-  if (text !== "10" && !/^[1-9]$/.test(text)) return 0
-  return parseInt(text, 10)
+  if (!/^[0-9]+$/.test(text)) return 0
+  var n = parseInt(text, 10)
+  return n >= 1 ? n : 0
 }
 
 function workspaceDigit(id) {
