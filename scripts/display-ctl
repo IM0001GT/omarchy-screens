@@ -14,7 +14,7 @@ Commands:
   profile apply <name>
   profile auto 0|1
   profile primary <identity>
-  workspaces on|off|sync|auto|assign <json>|plan
+  workspaces on|off|sync|auto|assign <json>|plan|total <N>|even 0|1
   workspace-layout <id> tile|scroll|float
   workspace-label <id> [name] [icon]
   idle off|on|notice
@@ -58,6 +58,7 @@ MANAGED_BEGIN = "-- BEGIN im0001gt.screens"
 MANAGED_END = "-- END im0001gt.screens"
 STAMPED_BACKUP_GLOB = "monitors.lua.[0-9]*"
 WORKSPACE_COUNT = 10
+WORKSPACE_TOTAL_CAP = 90
 OUR_WS_WIDGET = "im0001gt.screens.workspaces"
 STOCK_WS_WIDGET = "omarchy.workspaces"
 WORKSPACES_PLUGIN_FILES = (
@@ -736,6 +737,8 @@ def snapshot():
         "hybridGpus": hybrid_gpus(),
         "hybridNotice": hybrid_gpus() and not store.get("hybridNoticeShown"),
         "manageWorkspaces": bool(store.get("manageWorkspaces")),
+        "workspacesTotal": workspace_total(store=store),
+        "splitEvenly": split_evenly(store),
         "workspacePlan": plan_for_write(monitors) if store.get("manageWorkspaces") else [],
         "workspaceLayouts": store.get("workspaceLayouts") or {},
         "conflict": public_conflict(detect_conflicts()),
@@ -785,6 +788,8 @@ def load_store():
         "claimedMonitors": False,
         "hyprmoncfgChoiceSeen": False,
         "manageWorkspaces": False,
+        "workspacesTotal": WORKSPACE_COUNT,
+        "splitEvenly": True,
         "workspaceLayouts": {},
         "workspacesBarId": "",
     }
@@ -809,6 +814,10 @@ def load_store():
             store["claimedMonitors"] = bool(data.get("claimedMonitors"))
             store["hyprmoncfgChoiceSeen"] = bool(data.get("hyprmoncfgChoiceSeen"))
             store["manageWorkspaces"] = bool(data.get("manageWorkspaces"))
+            store["workspacesTotal"] = _clamp_int(
+                data.get("workspacesTotal"), 1, WORKSPACE_TOTAL_CAP, WORKSPACE_COUNT
+            )
+            store["splitEvenly"] = bool(data.get("splitEvenly", True))
             layouts = data.get("workspaceLayouts")
             if isinstance(layouts, dict):
                 cleaned = {}
@@ -1522,6 +1531,10 @@ def split_counts(n, total=WORKSPACE_COUNT):
 
 
 def workspace_hosts(monitors, primary=""):
+    # Ordered by physical position: leftmost screen gets 1..k, the next k+1..,
+    # etc. `primary` is accepted for call-site compatibility but intentionally
+    # does not affect plan numbering (its role is the panel-open preference in
+    # Model.preferredIndex, which is unchanged).
     hosts = []
     for mon in monitors or []:
         if not mon.get("enabled", True):
@@ -1531,17 +1544,32 @@ def workspace_hosts(monitors, primary=""):
         hosts.append(mon)
 
     def sort_key(mon):
-        ident = mon.get("identity") or monitor_identity(mon)
-        lead = 0 if (primary and ident == primary) else 1
-        return (lead, int(mon.get("x") or 0), int(mon.get("y") or 0), mon.get("name") or "")
+        return (int(mon.get("x") or 0), int(mon.get("y") or 0), mon.get("name") or "")
 
     hosts.sort(key=sort_key)
     return hosts
 
 
+def workspace_total(monitors=None, store=None):
+    """The number of workspaces the plugin manages, stored directly.
+
+    `monitors` is accepted for call-site convenience but unused: the total is
+    an explicit setting, not derived from the monitor count, so there is no
+    snapshot() dependency here.
+    """
+    store = store if store is not None else load_store()
+    return _clamp_int(store.get("workspacesTotal"), 1, WORKSPACE_TOTAL_CAP, WORKSPACE_COUNT)
+
+
+def split_evenly(store=None):
+    """Whether workspaces auto-split across screens (vs a saved manual plan)."""
+    store = store if store is not None else load_store()
+    return bool(store.get("splitEvenly", True))
+
+
 def workspace_plan(monitors, primary=""):
     hosts = workspace_hosts(monitors, primary)
-    counts = split_counts(len(hosts))
+    counts = split_counts(len(hosts), workspace_total())
     n = 1
     plan = []
     for mon, count in zip(hosts, counts):
@@ -1567,12 +1595,16 @@ def saved_plan():
 
 
 def plan_for_write(monitors):
-    """Keep a saved custom assignment, remapped onto the live hosts."""
-    saved = saved_plan()
-    primary = load_store().get("primary") or ""
+    """Auto split-evenly, or a saved manual assignment remapped onto live hosts."""
+    store = load_store()
+    primary = store.get("primary") or ""
     auto = workspace_plan(monitors, primary)
+    if split_evenly(store):
+        return auto
+    saved = saved_plan()
     if not saved:
         return auto
+    total = workspace_total(monitors, store)
     by_id = {}
     by_name = {}
     for item in saved:
@@ -1594,7 +1626,7 @@ def plan_for_write(monitors):
                 ws = int(ws)
             except (TypeError, ValueError):
                 continue
-            if ws < 1 or ws > WORKSPACE_COUNT or ws in used:
+            if ws < 1 or ws > total or ws in used:
                 continue
             used.add(ws)
             ids.append(ws)
@@ -1611,6 +1643,7 @@ def plan_for_write(monitors):
 
 
 def normalize_plan(monitors, raw):
+    total = workspace_total(monitors)
     known = {}
     for mon in monitors or []:
         ident = mon.get("identity") or monitor_identity(mon)
@@ -1639,8 +1672,8 @@ def normalize_plan(monitors, raw):
             except (TypeError, ValueError):
                 errors.append("workspace must be a number: %r" % (ws,))
                 continue
-            if ws < 1 or ws > WORKSPACE_COUNT:
-                errors.append("workspace %d out of range 1-%d" % (ws, WORKSPACE_COUNT))
+            if ws < 1 or ws > total:
+                errors.append("workspace %d out of range 1-%d" % (ws, total))
                 continue
             if ws in used:
                 errors.append("workspace %d assigned to more than one screen" % ws)
@@ -3898,12 +3931,14 @@ def parse_workspace_icon(raw):
     return text[0]
 
 
-def write_workspaces_json(enabled, plan, layouts, labels=None):
+def write_workspaces_json(enabled, plan, layouts, labels=None, total=None):
     if labels is None:
         labels = workspace_labels_from()
+    if total is None:
+        total = workspace_total()
     data = {
         "enabled": bool(enabled),
-        "total": WORKSPACE_COUNT,
+        "total": total,
         "layouts": layouts or {},
         "monitors": plan or [],
         "labels": labels,
@@ -3935,6 +3970,7 @@ def clamp_focus_workspace(ws, ids):
 
 
 def pin_workspaces(plan):
+    total = workspace_total()
     live = hypr_json(["monitors"]) or []
     focused = ""
     focused_ws = ""
@@ -3957,7 +3993,7 @@ def pin_workspaces(plan):
                 ws = int(ws)
             except (TypeError, ValueError):
                 continue
-            if ws < 1 or ws > WORKSPACE_COUNT:
+            if ws < 1 or ws > total:
                 continue
             hypr_dispatch(
                 "hl.dsp.workspace.move({ workspace = %s, monitor = %s })"
@@ -4098,7 +4134,7 @@ def workspace_layout_basename(key):
         n = int(str(key).strip())
     except (TypeError, ValueError):
         return ""
-    if n < 1 or n > WORKSPACE_COUNT:
+    if n < 1 or n > workspace_total():
         return ""
     return "%d.lua" % n
 
@@ -4407,6 +4443,49 @@ def set_manage_workspaces(on):
     return 0
 
 
+def reapply_workspaces_if_managed(store):
+    """Re-apply the workspace layout for a total/split change WITHOUT a full
+    Hyprland reload (a reload recenters the cursor — jarring mid-drag).
+
+    monitors.lua is still rewritten for boot persistence, but the live change
+    is applied by eval'ing the persistent workspace_rule statements directly
+    (the same hl.workspace_rule live-eval the plugin already uses in
+    apply_layout_live) and then moving the workspaces onto their screens via
+    pin_and_save_plan. Only set_workspaces_total / set_split_evenly use this.
+
+    Note: shrinking the total leaves the now-excess workspaces in place until
+    the next full reload; they simply stop being managed.
+    """
+    if not store.get("manageWorkspaces"):
+        return
+    live = snapshot_monitors_for_write()
+    write_monitors_lua(live)
+    for line in workspace_rule_lines(live, store.get("primary") or ""):
+        run(["hyprctl", "eval", line])
+    pin_and_save_plan(live)
+
+
+def set_workspaces_total(value):
+    store = load_store()
+    store["workspacesTotal"] = _clamp_int(
+        value, 1, WORKSPACE_TOTAL_CAP,
+        store.get("workspacesTotal") or WORKSPACE_COUNT,
+    )
+    save_store(store)
+    reapply_workspaces_if_managed(store)
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
+
+
+def set_split_evenly(value):
+    store = load_store()
+    store["splitEvenly"] = str(value).strip().lower() in ("1", "true", "on", "yes")
+    save_store(store)
+    reapply_workspaces_if_managed(store)
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
+
+
 def sync_workspaces():
     store = load_store()
     if not store.get("manageWorkspaces"):
@@ -4490,13 +4569,14 @@ def apply_layout_live(ws_id, mode):
 
 
 def set_workspace_layout(ws_id, mode):
+    total = workspace_total()
     try:
         ws_id = int(ws_id)
     except (TypeError, ValueError):
-        print("workspace-layout: workspace must be 1-10", file=sys.stderr)
+        print("workspace-layout: workspace must be 1-%d" % total, file=sys.stderr)
         return 2
-    if ws_id < 1 or ws_id > WORKSPACE_COUNT:
-        print("workspace-layout: workspace must be 1-10", file=sys.stderr)
+    if ws_id < 1 or ws_id > total:
+        print("workspace-layout: workspace must be 1-%d" % total, file=sys.stderr)
         return 2
     mode = clean_workspace_layout(mode)
     if not mode:
@@ -4523,8 +4603,8 @@ def set_workspace_label(ws_id, name="", icon=""):
         n = int(str(ws_id).strip())
     except (TypeError, ValueError):
         n = 0
-    if n < 1 or n > WORKSPACE_COUNT:
-        print("workspace-label: workspace must be 1-10", file=sys.stderr)
+    if n < 1 or n > workspace_total():
+        print("workspace-label: workspace must be 1-%d" % workspace_total(), file=sys.stderr)
         return 2
     data = read_workspaces_json()
     labels = dict(workspace_labels_from(data))
@@ -4687,6 +4767,10 @@ def main(argv):
             return sync_workspaces()
         if action == "plan":
             return report_workspace_plan()
+        if action == "total":
+            return set_workspaces_total(argv[2] if len(argv) > 2 else "")
+        if action == "even":
+            return set_split_evenly(argv[2] if len(argv) > 2 else "")
         if action == "assign":
             raw = argv[2] if len(argv) > 2 else sys.stdin.read()
             try:
@@ -4695,7 +4779,7 @@ def main(argv):
                 print("workspaces assign: bad json: %s" % exc, file=sys.stderr)
                 return 2
             return assign_workspaces(payload)
-        print("workspaces: on|off|sync|auto|assign <json>|plan", file=sys.stderr)
+        print("workspaces: on|off|sync|auto|assign <json>|plan|total <N>|even 0|1", file=sys.stderr)
         return 2
     if cmd == "workspace-layout":
         return set_workspace_layout(
