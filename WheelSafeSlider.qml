@@ -35,21 +35,6 @@ Item {
   readonly property real progress: Math.max(0, Math.min(1, (liveValue - minimum) / range))
   readonly property bool _hot: mouseArea.containsMouse || root.dragging
 
-  function panelIsScrolling() {
-    var p = parent
-    while (p) {
-      if (p.panelScrolling === true) return true
-      p = p.parent
-    }
-    return false
-  }
-
-  function nearTrack(y) {
-    var mid = height / 2
-    var slop = Math.max(root.knobSize * 0.65, Style.space(8))
-    return Math.abs(y - mid) <= slop
-  }
-
   Rectangle {
     id: track
     anchors.verticalCenter: parent.verticalCenter
@@ -148,16 +133,9 @@ Item {
       root.liveValue = root.value
     }
     onWheel: function(wheel) {
-      if (root.panelIsScrolling() || !root.nearTrack(wheel.y)) {
-        wheel.accepted = false
-        return
-      }
-      var delta = wheel.angleDelta.y > 0 ? root.step : -root.step
-      var next = Math.max(root.minimum, Math.min(root.maximum, root.liveValue + delta))
-      if (root.integer) next = Math.round(next)
-      root.liveValue = next
-      root.moved(next)
-      root.released(next)
+      // Sliders are drag-only: never consume wheel, so scrolling the panel over
+      // a slider always scrolls the panel instead of nudging the value.
+      wheel.accepted = false
     }
   }
 }
