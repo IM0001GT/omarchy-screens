@@ -555,9 +555,23 @@ function workspaceHosts(monitors, primary) {
   return hosts
 }
 
-function workspacePlan(monitors, primary) {
+function clampWorkspaceTotal(value) {
+  var n = Math.round(Number(value))
+  if (!isFinite(n)) return 10
+  if (n < 1) return 1
+  if (n > 99) return 99
+  return n
+}
+
+function defaultWorkspaceTotal(screens) {
+  var n = Math.round(Number(screens) || 0)
+  if (n < 1) n = 1
+  return clampWorkspaceTotal(n * 10)
+}
+
+function workspacePlan(monitors, primary, total) {
   var hosts = workspaceHosts(monitors, primary)
-  var counts = splitCounts(hosts.length, 10)
+  var counts = splitCounts(hosts.length, clampWorkspaceTotal(total || 10))
   var n = 1
   var plan = []
   for (var i = 0; i < hosts.length; i++) {
@@ -588,8 +602,10 @@ function planForMonitor(plan, mon) {
 
 function workspaceId(id) {
   var text = String(id == null ? "" : id).trim()
-  if (text !== "10" && !/^[1-9]$/.test(text)) return 0
-  return parseInt(text, 10)
+  if (!/^[0-9]+$/.test(text)) return 0
+  var n = parseInt(text, 10)
+  if (n < 1 || n > 99) return 0
+  return n
 }
 
 function workspaceDigit(id) {
@@ -699,6 +715,12 @@ function findHostBar(item) {
   return null
 }
 
+function opacityUnchanged(item, opacity) {
+  if (!item) return true
+  var cur = Number(item.opacity)
+  return isFinite(cur) && Math.abs(cur - opacity) < 0.001
+}
+
 function applyBarCare(bar, care, state) {
   if (!bar || !bar.moduleSlots)
     return false
@@ -708,7 +730,7 @@ function applyBarCare(bar, care, state) {
   var opacity = barOpacityFor(care, { hovered: hovered, barHidden: hidden })
   var i
   for (i = 0; i < slots.length; i++) {
-    if (!slots[i]) continue
+    if (!slots[i] || opacityUnchanged(slots[i], opacity)) continue
     try { slots[i].opacity = opacity } catch (e) {}
   }
   return true
@@ -735,11 +757,30 @@ function applyBarCareToWindow(win, care, state) {
     : windowTreeHovered(win.contentItem, 0)
   var hidden = !!st.barHidden
   var opacity = barOpacityFor(care, { hovered: hovered, barHidden: hidden })
-  var cur = Number(win.contentItem.opacity)
-  if (isFinite(cur) && Math.abs(cur - opacity) < 0.001)
+  if (opacityUnchanged(win.contentItem, opacity))
     return true
   try { win.contentItem.opacity = opacity } catch (e) { return false }
   return true
+}
+
+function monitorTopologyKey(monitors) {
+  var vals
+  if (!monitors) return ""
+  if (Array.isArray(monitors)) vals = monitors
+  else if (monitors.values && typeof monitors.values !== "function") vals = monitors.values
+  else return ""
+  if (!vals || !vals.length) return ""
+  var parts = []
+  var i, m, name
+  for (i = 0; i < vals.length; i++) {
+    m = vals[i]
+    if (!m) continue
+    name = String(m.name || "")
+    if (!name) continue
+    parts.push(name)
+  }
+  parts.sort()
+  return parts.join("\n")
 }
 
 if (typeof module !== "undefined") {
@@ -773,6 +814,8 @@ if (typeof module !== "undefined") {
     brightnessName: brightnessName,
     lastDisplayQuip: lastDisplayQuip,
     splitCounts: splitCounts,
+    clampWorkspaceTotal: clampWorkspaceTotal,
+    defaultWorkspaceTotal: defaultWorkspaceTotal,
     workspaceHosts: workspaceHosts,
     workspacePlan: workspacePlan,
     planForMonitor: planForMonitor,
@@ -790,7 +833,9 @@ if (typeof module !== "undefined") {
     barOpacityFor: barOpacityFor,
     findHostBar: findHostBar,
     applyBarCare: applyBarCare,
+    opacityUnchanged: opacityUnchanged,
     windowTreeHovered: windowTreeHovered,
-    applyBarCareToWindow: applyBarCareToWindow
+    applyBarCareToWindow: applyBarCareToWindow,
+    monitorTopologyKey: monitorTopologyKey
   }
 }

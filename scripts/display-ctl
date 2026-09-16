@@ -14,7 +14,7 @@ Commands:
   profile apply <name>
   profile auto 0|1
   profile primary <identity>
-  workspaces on|off|sync|auto|assign <json>|plan
+  workspaces on|off|sync|auto|assign <json>|plan|total <N>
   workspace-layout <id> tile|scroll|float
   workspace-label <id> [name] [icon]
   idle off|on|notice
@@ -58,6 +58,8 @@ MANAGED_BEGIN = "-- BEGIN im0001gt.screens"
 MANAGED_END = "-- END im0001gt.screens"
 STAMPED_BACKUP_GLOB = "monitors.lua.[0-9]*"
 WORKSPACE_COUNT = 10
+WORKSPACE_TOTAL_CAP = 99
+WORKSPACES_PER_SCREEN = 10
 OUR_WS_WIDGET = "im0001gt.screens.workspaces"
 STOCK_WS_WIDGET = "omarchy.workspaces"
 WORKSPACES_PLUGIN_FILES = (
@@ -736,6 +738,7 @@ def snapshot():
         "hybridGpus": hybrid_gpus(),
         "hybridNotice": hybrid_gpus() and not store.get("hybridNoticeShown"),
         "manageWorkspaces": bool(store.get("manageWorkspaces")),
+        "workspacesTotal": workspace_total(),
         "workspacePlan": plan_for_write(monitors) if store.get("manageWorkspaces") else [],
         "workspaceLayouts": store.get("workspaceLayouts") or {},
         "conflict": public_conflict(detect_conflicts()),
@@ -785,6 +788,7 @@ def load_store():
         "claimedMonitors": False,
         "hyprmoncfgChoiceSeen": False,
         "manageWorkspaces": False,
+        "workspacesTotal": WORKSPACE_COUNT,
         "workspaceLayouts": {},
         "workspacesBarId": "",
     }
@@ -809,6 +813,7 @@ def load_store():
             store["claimedMonitors"] = bool(data.get("claimedMonitors"))
             store["hyprmoncfgChoiceSeen"] = bool(data.get("hyprmoncfgChoiceSeen"))
             store["manageWorkspaces"] = bool(data.get("manageWorkspaces"))
+            store["workspacesTotal"] = clamp_workspace_total(data.get("workspacesTotal"))
             layouts = data.get("workspaceLayouts")
             if isinstance(layouts, dict):
                 cleaned = {}
@@ -839,6 +844,24 @@ def _clamp_int(value, lo, hi, fallback):
     if n > hi:
         return hi
     return n
+
+
+def clamp_workspace_total(value):
+    return _clamp_int(value, 1, WORKSPACE_TOTAL_CAP, WORKSPACE_COUNT)
+
+
+def workspace_total():
+    return clamp_workspace_total(load_store().get("workspacesTotal"))
+
+
+def default_workspace_total(screens):
+    try:
+        n = int(screens)
+    except (TypeError, ValueError):
+        n = 1
+    if n < 1:
+        n = 1
+    return clamp_workspace_total(n * WORKSPACES_PER_SCREEN)
 
 
 def normalize_bar_care(raw):
@@ -1539,9 +1562,9 @@ def workspace_hosts(monitors, primary=""):
     return hosts
 
 
-def workspace_plan(monitors, primary=""):
+def workspace_plan(monitors, primary="", total=None):
     hosts = workspace_hosts(monitors, primary)
-    counts = split_counts(len(hosts))
+    counts = split_counts(len(hosts), WORKSPACE_COUNT if total is None else clamp_workspace_total(total))
     n = 1
     plan = []
     for mon, count in zip(hosts, counts):
@@ -1570,7 +1593,7 @@ def plan_for_write(monitors):
     """Keep a saved custom assignment, remapped onto the live hosts."""
     saved = saved_plan()
     primary = load_store().get("primary") or ""
-    auto = workspace_plan(monitors, primary)
+    auto = workspace_plan(monitors, primary, workspace_total())
     if not saved:
         return auto
     by_id = {}
@@ -1594,7 +1617,7 @@ def plan_for_write(monitors):
                 ws = int(ws)
             except (TypeError, ValueError):
                 continue
-            if ws < 1 or ws > WORKSPACE_COUNT or ws in used:
+            if ws < 1 or ws > workspace_total() or ws in used:
                 continue
             used.add(ws)
             ids.append(ws)
@@ -1639,8 +1662,8 @@ def normalize_plan(monitors, raw):
             except (TypeError, ValueError):
                 errors.append("workspace must be a number: %r" % (ws,))
                 continue
-            if ws < 1 or ws > WORKSPACE_COUNT:
-                errors.append("workspace %d out of range 1-%d" % (ws, WORKSPACE_COUNT))
+            if ws < 1 or ws > workspace_total():
+                errors.append("workspace %d out of range 1-%d" % (ws, workspace_total()))
                 continue
             if ws in used:
                 errors.append("workspace %d assigned to more than one screen" % ws)
@@ -1678,11 +1701,29 @@ def assign_workspaces(raw):
 def auto_workspaces():
     store = load_store()
     monitors = snapshot()["monitors"]
-    plan = workspace_plan(monitors, store.get("primary") or "")
+    plan = workspace_plan(monitors, store.get("primary") or "", workspace_total())
     write_workspaces_json(True, plan, store.get("workspaceLayouts") or {})
     write_monitors_lua(snapshot_monitors_for_write())
     reload_hypr()
     pin_workspaces(plan)
+    print(json.dumps(snapshot(), separators=(",", ":")))
+    return 0
+
+
+def set_workspaces_total(raw):
+    n = clamp_workspace_total(raw)
+    store = load_store()
+    store["workspacesTotal"] = n
+    save_store(store)
+    if not store.get("manageWorkspaces"):
+        print(json.dumps(snapshot(), separators=(",", ":")))
+        return 0
+    live = snapshot_monitors_for_write()
+    plan = workspace_plan(live, store.get("primary") or "", n)
+    write_workspaces_json(True, plan, store.get("workspaceLayouts") or {})
+    write_monitors_lua(live)
+    reload_hypr()
+    pin_and_save_plan(live)
     print(json.dumps(snapshot(), separators=(",", ":")))
     return 0
 
@@ -2260,7 +2301,7 @@ def capture_workspace_layouts():
     layouts = manifest.setdefault("workspaceLayouts", {})
     changed = False
     layout_dir = os.path.join(originals_dir(), "workspace-layouts")
-    for i in range(1, WORKSPACE_COUNT + 1):
+    for i in range(1, WORKSPACE_TOTAL_CAP + 1):
         key = str(i)
         if key in layouts:
             continue
@@ -2456,7 +2497,7 @@ for key, state in (manifest.get("workspaceLayouts") or {}).items():
         n = int(str(key).strip())
     except (TypeError, ValueError):
         continue
-    if n < 1 or n > 10:
+    if n < 1 or n > 99:
         continue
     name = "%d.lua" % n
     dest = os.path.join(layouts, name)
@@ -3903,7 +3944,7 @@ def write_workspaces_json(enabled, plan, layouts, labels=None):
         labels = workspace_labels_from()
     data = {
         "enabled": bool(enabled),
-        "total": WORKSPACE_COUNT,
+        "total": workspace_total(),
         "layouts": layouts or {},
         "monitors": plan or [],
         "labels": labels,
@@ -3929,7 +3970,7 @@ def clamp_focus_workspace(ws, ids):
         n = int(ws)
     except (TypeError, ValueError):
         return ""
-    if 1 <= n <= WORKSPACE_COUNT:
+    if 1 <= n <= workspace_total():
         return str(n)
     return ""
 
@@ -3957,7 +3998,7 @@ def pin_workspaces(plan):
                 ws = int(ws)
             except (TypeError, ValueError):
                 continue
-            if ws < 1 or ws > WORKSPACE_COUNT:
+            if ws < 1 or ws > workspace_total():
                 continue
             hypr_dispatch(
                 "hl.dsp.workspace.move({ workspace = %s, monitor = %s })"
@@ -3982,16 +4023,65 @@ def pin_workspaces(plan):
             hypr_dispatch("hl.dsp.focus({ workspace = %s })" % lua_str(next_ws))
 
 
+def mop_stray_workspaces(plan):
+    """Move windows off workspaces we no longer manage so they cannot stick around."""
+    allowed = set()
+    first = 0
+    by_mon = {}
+    for item in plan or []:
+        ids = []
+        for ws in item.get("ids") or []:
+            try:
+                n = int(ws)
+            except (TypeError, ValueError):
+                continue
+            if n < 1:
+                continue
+            allowed.add(n)
+            ids.append(n)
+            if not first or n < first:
+                first = n
+        dest = clean_connector(item.get("name"))
+        if dest and ids:
+            by_mon[dest] = ids[0]
+    if not first:
+        first = 1
+    clients = hypr_json(["clients"]) or []
+    for client in clients:
+        ws = client.get("workspace") or {}
+        try:
+            cid = int(ws.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cid < 1 or cid in allowed:
+            continue
+        addr = str(client.get("address") or "")
+        if not addr:
+            continue
+        if not addr.startswith("address:"):
+            addr = "address:%s" % addr
+        mon = clean_connector(client.get("monitor") or "")
+        dest = by_mon.get(mon) or first
+        hypr_dispatch(
+            "hl.dsp.window.move({ workspace = %s, window = %s, follow = false })"
+            % (lua_str(str(dest)), lua_str(addr))
+        )
+
+
 def pin_and_save_plan(monitors):
     store = load_store()
     plan = plan_for_write(monitors)
     write_workspaces_json(True, plan, store.get("workspaceLayouts") or {})
     pin_workspaces(plan)
+    mop_stray_workspaces(plan)
     for ws_id, mode in (store.get("workspaceLayouts") or {}).items():
         try:
-            apply_layout_live(int(ws_id), mode)
+            n = int(ws_id)
         except (TypeError, ValueError):
             continue
+        if n < 1 or n > workspace_total():
+            continue
+        apply_layout_live(n, mode)
 
 
 def plugin_present(plugin_id):
@@ -4098,7 +4188,7 @@ def workspace_layout_basename(key):
         n = int(str(key).strip())
     except (TypeError, ValueError):
         return ""
-    if n < 1 or n > WORKSPACE_COUNT:
+    if n < 1 or n > WORKSPACE_TOTAL_CAP:
         return ""
     return "%d.lua" % n
 
@@ -4493,10 +4583,10 @@ def set_workspace_layout(ws_id, mode):
     try:
         ws_id = int(ws_id)
     except (TypeError, ValueError):
-        print("workspace-layout: workspace must be 1-10", file=sys.stderr)
+        print("workspace-layout: workspace must be 1-%d" % workspace_total(), file=sys.stderr)
         return 2
-    if ws_id < 1 or ws_id > WORKSPACE_COUNT:
-        print("workspace-layout: workspace must be 1-10", file=sys.stderr)
+    if ws_id < 1 or ws_id > workspace_total():
+        print("workspace-layout: workspace must be 1-%d" % workspace_total(), file=sys.stderr)
         return 2
     mode = clean_workspace_layout(mode)
     if not mode:
@@ -4523,8 +4613,8 @@ def set_workspace_label(ws_id, name="", icon=""):
         n = int(str(ws_id).strip())
     except (TypeError, ValueError):
         n = 0
-    if n < 1 or n > WORKSPACE_COUNT:
-        print("workspace-label: workspace must be 1-10", file=sys.stderr)
+    if n < 1 or n > workspace_total():
+        print("workspace-label: workspace must be 1-%d" % workspace_total(), file=sys.stderr)
         return 2
     data = read_workspaces_json()
     labels = dict(workspace_labels_from(data))
@@ -4695,7 +4785,9 @@ def main(argv):
                 print("workspaces assign: bad json: %s" % exc, file=sys.stderr)
                 return 2
             return assign_workspaces(payload)
-        print("workspaces: on|off|sync|auto|assign <json>|plan", file=sys.stderr)
+        if action == "total":
+            return set_workspaces_total(argv[2] if len(argv) > 2 else "")
+        print("workspaces: on|off|sync|auto|assign <json>|plan|total <N>", file=sys.stderr)
         return 2
     if cmd == "workspace-layout":
         return set_workspace_layout(

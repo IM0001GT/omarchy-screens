@@ -39,6 +39,11 @@ class SplitCounts(unittest.TestCase):
     def test_one_monitor_keeps_all_ten(self):
         self.assertEqual(self.ctl.split_counts(1), [10])
 
+    def test_custom_total_splits_evenly(self):
+        self.assertEqual(self.ctl.split_counts(2, 20), [10, 10])
+        self.assertEqual(self.ctl.split_counts(3, 30), [10, 10, 10])
+        self.assertEqual(sum(self.ctl.split_counts(2, 21)), 21)
+
     def test_empty(self):
         self.assertEqual(self.ctl.split_counts(0), [])
 
@@ -132,6 +137,46 @@ class WorkspacePlan(unittest.TestCase):
         self.assertEqual(self.ctl.clamp_focus_workspace("7", [6, 7, 8, 9, 10]), "7")
         self.assertEqual(self.ctl.clamp_focus_workspace("11", []), "")
         self.assertEqual(self.ctl.clamp_focus_workspace("3", []), "3")
+
+    def test_primary_still_gets_the_first_block_at_twenty(self):
+        plan = self.ctl.workspace_plan([self.left, self.right], self.right["identity"], 20)
+        self.assertEqual(plan[0]["name"], "HDMI-A-1")
+        self.assertEqual(plan[0]["ids"], list(range(1, 11)))
+        self.assertEqual(plan[1]["name"], "DP-4")
+        self.assertEqual(plan[1]["ids"], list(range(11, 21)))
+
+    def test_custom_plan_keeps_ids_inside_the_stored_total(self):
+        self.ctl.save_store(dict(self.ctl.load_store(), workspacesTotal=20))
+        self.ctl.write_workspaces_json(True, [
+            {"name": "HDMI-A-1", "identity": self.right["identity"], "ids": [1, 2, 20]},
+            {"name": "DP-4", "identity": self.left["identity"], "ids": [11, 12]},
+        ], {})
+        plan = self.ctl.plan_for_write([self.left, self.right])
+        by_name = {p["name"]: p["ids"] for p in plan}
+        self.assertEqual(by_name["HDMI-A-1"], [1, 2, 20])
+        self.assertEqual(by_name["DP-4"], [11, 12])
+
+    def test_total_is_clamped(self):
+        self.assertEqual(self.ctl.clamp_workspace_total(999), self.ctl.WORKSPACE_TOTAL_CAP)
+        self.assertEqual(self.ctl.clamp_workspace_total(0), 1)
+        self.assertEqual(self.ctl.default_workspace_total(2), 20)
+        self.assertEqual(self.ctl.default_workspace_total(3), 30)
+
+    def test_mop_moves_windows_off_unmanaged_workspaces(self):
+        moved = []
+        self.ctl.hypr_json = lambda args: [{
+            "workspace": {"id": 11},
+            "monitor": "DP-4",
+            "address": "0xabc",
+        }]
+        self.ctl.hypr_dispatch = lambda cmd: moved.append(cmd)
+        self.ctl.mop_stray_workspaces([
+            {"name": "DP-4", "ids": [1, 2, 3, 4, 5]},
+            {"name": "HDMI-A-1", "ids": [6, 7, 8, 9, 10]},
+        ])
+        self.assertEqual(len(moved), 1)
+        self.assertIn('workspace = "1"', moved[0])
+        self.assertIn("0xabc", moved[0])
 
 
 class LayoutNames(unittest.TestCase):
@@ -281,6 +326,28 @@ class StockBackups(unittest.TestCase):
             ".config/omarchy/plugins/im0001gt.screens.workspaces",
         )
         self.assertNotEqual(self.ctl.workspaces_plugin_dir(), live_companion)
+
+    def test_backup_restores_workspace_layouts_past_ten(self):
+        with open(os.path.join(self.ctl.LAYOUTS_DIR, "20.lua"), "w", encoding="utf-8") as fh:
+            fh.write('hl.workspace_rule({ workspace = "20" })\n')
+        self.ctl.ensure_stock_backups()
+        with open(self.ctl.restore_helper_path(), encoding="utf-8") as fh:
+            helper = fh.read()
+        self.assertIn("n > %d" % self.ctl.WORKSPACE_TOTAL_CAP, helper)
+        manifest = self.ctl.load_originals_manifest()
+        self.assertEqual(manifest["workspaceLayouts"]["20"], "present")
+        self.assertEqual(manifest["workspaceLayouts"]["11"], "absent")
+        with open(os.path.join(self.ctl.LAYOUTS_DIR, "20.lua"), "w", encoding="utf-8") as fh:
+            fh.write("changed\n")
+        with open(os.path.join(self.ctl.LAYOUTS_DIR, "11.lua"), "w", encoding="utf-8") as fh:
+            fh.write("stray\n")
+        self.ctl.reload_hypr = lambda: None
+        self.ctl.remove_workspaces_plugin = lambda: False
+        rc = self.ctl.restore_original()
+        self.assertEqual(rc, 0)
+        with open(os.path.join(self.ctl.LAYOUTS_DIR, "20.lua"), encoding="utf-8") as fh:
+            self.assertIn('workspace = "20"', fh.read())
+        self.assertFalse(os.path.isfile(os.path.join(self.ctl.LAYOUTS_DIR, "11.lua")))
 
     def test_bindings_backup_strips_managed_block(self):
         with open(self.ctl.BINDINGS_LUA, "w", encoding="utf-8") as fh:
@@ -964,7 +1031,7 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
                 "schemaVersion": 1,
                 "id": "im0001gt.screens",
                 "name": "Screens",
-                "version": "1.13.1",
+                "version": "1.14.0",
                 "kinds": ["bar-widget", "service"],
                 "entryPoints": {"barWidget": "Screens.qml", "service": "Service.qml"},
             }, fh)
@@ -986,7 +1053,7 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
         with open(manifest_path, encoding="utf-8") as fh:
             manifest = json.load(fh)
         self.assertEqual(manifest["id"], "im0001gt.screens.workspaces")
-        self.assertEqual(manifest["version"], "1.13.1")
+        self.assertEqual(manifest["version"], "1.14.0")
         self.assertEqual(manifest["kinds"], ["bar-widget"])
         self.assertEqual(manifest["entryPoints"]["barWidget"], "Workspaces.qml")
         self.assertEqual(manifest["barWidget"]["displayName"], "Screens workspaces")
@@ -1109,8 +1176,10 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
 
     def test_layout_basename_rejects_traversal(self):
         self.assertEqual(self.ctl.workspace_layout_basename("3"), "3.lua")
+        self.assertEqual(self.ctl.workspace_layout_basename("11"), "11.lua")
         self.assertEqual(self.ctl.workspace_layout_basename("../etc/passwd"), "")
-        self.assertEqual(self.ctl.workspace_layout_basename("11"), "")
+        self.assertEqual(self.ctl.workspace_layout_basename("0"), "")
+        self.assertEqual(self.ctl.workspace_layout_basename("100"), "")
 
     def test_restore_original_removes_generated_companion(self):
         self.ctl.install_workspaces_plugin()

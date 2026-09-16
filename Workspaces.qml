@@ -11,7 +11,8 @@ BarWidget {
   id: root
   moduleName: "im0001gt.screens.workspaces"
 
-  property var assignment: ({ enabled: false, monitors: [], layouts: {}, labels: {} })
+  property var assignment: ({ enabled: false, monitors: [], layouts: {}, labels: {}, total: 10 })
+  readonly property int workspaceMax: Model.clampWorkspaceTotal(root.assignment && root.assignment.total)
   property int menuWorkspace: 0
   property var menuAnchor: null
   property bool menuOpen: false
@@ -72,7 +73,7 @@ BarWidget {
       var live = Hyprland.workspaces.values
       for (i = 0; i < live.length; i++) {
         var wid = live[i].id
-        if (wid > 0 && wid <= 10
+        if (wid > 0 && wid <= root.workspaceMax
             && assigned.indexOf(wid) === -1
             && here.indexOf(wid) === -1
             && root.workspaceMonitorName(live[i]) === root.barScreenName)
@@ -85,7 +86,7 @@ BarWidget {
     var values = Hyprland.workspaces.values
     for (i = 0; i < values.length; i++) {
       var id = values[i].id
-      if (id > 0 && id <= 10 && root.workspaceMonitorName(values[i]) === root.barScreenName
+      if (id > 0 && id <= root.workspaceMax && root.workspaceMonitorName(values[i]) === root.barScreenName
           && ids.indexOf(id) === -1)
         ids.push(id)
     }
@@ -181,7 +182,7 @@ BarWidget {
       catch (e) {}
     }
     onFileChanged: reload()
-    onLoadFailed: root.assignment = ({ enabled: false, monitors: [], layouts: {}, labels: {} })
+    onLoadFailed: root.assignment = ({ enabled: false, monitors: [], layouts: {}, labels: {}, total: 10 })
     Component.onCompleted: reload()
   }
 
@@ -361,24 +362,21 @@ BarWidget {
     function close() { root.menuOpen = false }
   }
 
-  Item {
-    id: dummyAnchor
-    width: 1
-    height: 1
-    visible: false
-  }
-
-  WorkspaceLayoutMenu {
-    id: workspaceMenu
-    anchorItem: root.menuAnchor || dummyAnchor
-    bar: root.bar
-    owner: menuOwner
-    open: root.menuOpen && !!root.menuAnchor
-    workspaceId: root.menuWorkspace
-    currentLayout: root.layoutOf(root.menuWorkspace)
-    workspaceName: Model.workspaceLabelOf(root.assignment, root.menuWorkspace).name
-    workspaceIcon: Model.workspaceLabelOf(root.assignment, root.menuWorkspace).icon
-    onChosen: function(mode) { root.setWorkspaceLayout(mode) }
-    onLabeled: function(name, icon) { root.setWorkspaceLabel(name, icon) }
+  Loader {
+    active: root.menuOpen && !!root.menuAnchor
+    sourceComponent: Component {
+      WorkspaceLayoutMenu {
+        anchorItem: root.menuAnchor
+        bar: root.bar
+        owner: menuOwner
+        open: true
+        workspaceId: root.menuWorkspace
+        currentLayout: root.layoutOf(root.menuWorkspace)
+        workspaceName: Model.workspaceLabelOf(root.assignment, root.menuWorkspace).name
+        workspaceIcon: Model.workspaceLabelOf(root.assignment, root.menuWorkspace).icon
+        onChosen: function(mode) { root.setWorkspaceLayout(mode) }
+        onLabeled: function(name, icon) { root.setWorkspaceLabel(name, icon) }
+      }
+    }
   }
 }

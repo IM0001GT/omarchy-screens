@@ -63,8 +63,8 @@ Item {
   }
   onHyprMonitorCountChanged: root.requestRecover()
   onCareConfigChanged: root.applyCareVisuals()
-  onBarHoveredChanged: root.applyCareVisuals()
-  onBarHiddenChanged: root.applyCareVisuals()
+  onBarHoveredChanged: if (root.careEnabled) root.applyCareVisuals()
+  onBarHiddenChanged: if (root.careEnabled) root.applyCareVisuals()
   onBarChanged: root.applyCareVisuals()
 
   Process {

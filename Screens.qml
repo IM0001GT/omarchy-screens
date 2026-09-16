@@ -72,6 +72,8 @@ Panel {
   property int lastDisplayQuipIndex: 0
   property string lastDisplayQuip: ""
   property bool manageWorkspaces: false
+  property bool workspacesOpen: false
+  property int workspacesTotal: 10
   property var workspacePlan: []
   property var workspaceLayouts: ({})
   property int layoutMenuWorkspace: 0
@@ -187,6 +189,12 @@ Panel {
       if (String(screens[i].name) === name) return screens[i]
     }
     return null
+  }
+
+  readonly property string hyprTopology: Model.monitorTopologyKey(Hyprland.monitors)
+  onHyprTopologyChanged: {
+    if (root.dragging || root.applying || root.layoutDirty || root.pendingConfirm) return
+    Qt.callLater(root.refresh)
   }
 
   function refresh() {
@@ -389,6 +397,8 @@ Panel {
     root.primaryId = (data && data.primary) ? String(data.primary) : ""
     root.hybridGpus = !!(data && data.hybridGpus)
     root.manageWorkspaces = !!(data && data.manageWorkspaces)
+    root.workspacesTotal = Model.clampWorkspaceTotal(data && data.workspacesTotal)
+    if (!root.manageWorkspaces) root.workspacesOpen = false
     root.workspacePlan = (data && data.workspacePlan) ? data.workspacePlan : []
     root.workspaceLayouts = (data && data.workspaceLayouts) ? data.workspaceLayouts : ({})
     root.oledGuard = !!(data && data.oledGuard)
@@ -513,6 +523,7 @@ Panel {
       if (root.isPanelOwner()) root.careService.panelMapped = true
     }
     root.controller.show()
+    root.refresh()
   }
 
   function close() {
@@ -920,7 +931,18 @@ Panel {
 
   function setManageWorkspaces(on) {
     root.manageWorkspaces = !!on
+    if (!on) root.workspacesOpen = false
     root.runStore(["workspaces", on ? "on" : "off"])
+  }
+
+  function setWorkspacesTotal(value) {
+    var n = Model.clampWorkspaceTotal(value)
+    root.workspacesTotal = n
+    root.runStore(["workspaces", "total", String(n)])
+  }
+
+  function tenPerScreen() {
+    root.setWorkspacesTotal(Model.defaultWorkspaceTotal(root.enabledCount))
   }
 
   function syncWorkspaces() {
@@ -964,7 +986,8 @@ Panel {
 
   function unassignedWorkspaceIds() {
     var out = []
-    for (var id = 1; id <= 10; id++) {
+    var total = Model.clampWorkspaceTotal(root.workspacesTotal)
+    for (var id = 1; id <= total; id++) {
       if (!root.workspaceHolderId(id)) out.push(id)
     }
     return out
@@ -1066,9 +1089,13 @@ Panel {
   }
 
   function applyCareVisuals() {
+    var enabled = !!(root.barCare && root.barCare.enabled)
     var win = root.barWindow()
-    var hover = root.ensureCareHover()
-    var hovered = !!(hover && hover.hovered)
+    var hovered = false
+    if (enabled) {
+      var hover = root.ensureCareHover()
+      hovered = !!(hover && hover.hovered)
+    }
     if (Model.applyBarCareToWindow(win, root.barCare, { hovered: hovered }))
       return
     Model.applyBarCare(root.hostBar(), root.barCare, { hovered: hovered })
@@ -1097,12 +1124,13 @@ Panel {
   }
 
   function workspaceDescription() {
-    var hint = "Right-click a number to name it, pick an icon, or set Tile, Scroll, or Float."
+    var total = Model.clampWorkspaceTotal(root.workspacesTotal)
+    var hint = "Assign opens pinning. Super+1–0 still jump 1–10; extras are on the bar, Super+Tab, or Super+wheel."
     if (root.enabledCount <= 1)
-      return "Keep workspaces 1–10 on this screen. " + hint
+      return "Keep workspaces 1–" + total + " on this screen. " + hint
     if (root.enabledCount === 2)
-      return "Primary gets 1–5, the next screen gets 6–10. " + hint
-    return "Split ten workspaces across these screens. " + hint
+      return "Primary gets the first block of 1–" + total + ", the next screen gets the rest. " + hint
+    return "Split " + total + " workspaces across these screens. " + hint
   }
 
   function identify() {
@@ -1229,9 +1257,11 @@ Panel {
     function unblank(): void { root.standbyOff() }
   }
 
+  // Poll only while the panel is open. A 2s poll while closed kept a hidden
+  // overlay tree dirty and stole damage from other Omarchy menus.
   Timer {
-    interval: root.opened ? 4000 : 2000
-    running: !root.dragging && !root.applying && !root.layoutDirty && !root.pendingConfirm
+    interval: 4000
+    running: root.opened && !root.dragging && !root.applying && !root.layoutDirty && !root.pendingConfirm
     repeat: true
     onTriggered: root.refresh()
   }
@@ -1529,6 +1559,16 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: {
+        var win = panel.QsWindow ? panel.QsWindow.window : null
+        var item = win ? win.activeFocusItem : null
+        while (item) {
+          if (item.keyAdjust === true) return true
+          if (item === profileNameField) return true
+          item = item.parent
+        }
+        return false
+      }
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onMoveRequested: function(dx, dy) {
@@ -1914,11 +1954,14 @@ Panel {
             width: parent.width
             spacing: Style.space(6)
 
-            Row {
+            Item {
               width: parent.width
-              spacing: Style.space(6)
+              visible: !root.namingProfile
+              implicitHeight: Math.max(profileLabel.implicitHeight, profileNameBox.implicitHeight, profileActions.implicitHeight)
 
               Text {
+                id: profileLabel
+                anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
                 text: "PROFILE"
                 color: Qt.darker(root.bar.foreground, 1.4)
@@ -1928,82 +1971,101 @@ Panel {
                 font.letterSpacing: Style.font.caption * 0.1
               }
 
-              Dropdown {
-                visible: !root.namingProfile && root.profiles.length > 1
-                width: Style.space(168)
-                showLabel: false
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
-                value: root.activeProfile
-                options: Model.profileOptions(root.profiles)
-                onChanged: function(v) { if (v) root.applyProfile(v) }
+              Row {
+                id: profileActions
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(6)
+
+                Button {
+                  visible: root.profiles.length > 1 && !!root.activeProfile
+                  text: "Apply"
+                  fontSize: Style.font.caption
+                  fontFamily: root.bar.fontFamily
+                  foreground: root.bar.foreground
+                  bordered: true
+                  horizontalPadding: Style.space(10)
+                  verticalPadding: Style.space(3)
+                  tooltipText: "Apply the selected layout"
+                  onClicked: root.applyProfile(root.activeProfile)
+                }
+
+                Button {
+                  text: "Save"
+                  fontSize: Style.font.caption
+                  fontFamily: root.bar.fontFamily
+                  foreground: root.bar.foreground
+                  bordered: true
+                  horizontalPadding: Style.space(10)
+                  verticalPadding: Style.space(3)
+                  onClicked: root.beginSave()
+                }
+
+                Button {
+                  visible: root.profiles.length > 0
+                  text: "Delete"
+                  fontSize: Style.font.caption
+                  fontFamily: root.bar.fontFamily
+                  foreground: root.bar.foreground
+                  bordered: true
+                  horizontalPadding: Style.space(10)
+                  verticalPadding: Style.space(3)
+                  onClicked: root.deleteProfile()
+                }
+
+                Button {
+                  text: root.autoSwitch ? "On connect" : "Manual"
+                  fontSize: Style.font.caption
+                  fontFamily: root.bar.fontFamily
+                  foreground: root.bar.foreground
+                  bordered: true
+                  active: root.autoSwitch
+                  horizontalPadding: Style.space(10)
+                  verticalPadding: Style.space(3)
+                  tooltipText: root.autoSwitch
+                    ? "On: restore the matching saved layout when a display is plugged in"
+                    : "Off: leave the layout alone when a display is plugged in"
+                  onClicked: root.setAutoSwitch(!root.autoSwitch)
+                }
               }
 
-              Button {
-                visible: !root.namingProfile && root.profiles.length === 1
-                text: root.firstProfileName()
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                active: true
-                horizontalPadding: Style.space(10)
-                verticalPadding: Style.space(3)
-                tooltipText: "Apply this saved layout"
-                onClicked: root.applyProfile(root.firstProfileName())
-              }
+              Item {
+                id: profileNameBox
+                anchors.left: profileLabel.right
+                anchors.leftMargin: Style.space(6)
+                anchors.right: profileActions.left
+                anchors.rightMargin: Style.space(6)
+                anchors.verticalCenter: parent.verticalCenter
+                height: Math.max(profileDrop.implicitHeight, profileSolo.implicitHeight)
+                clip: true
 
-              Button {
-                visible: !root.namingProfile && root.profiles.length > 1 && !!root.activeProfile
-                text: "Apply"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                horizontalPadding: Style.space(10)
-                verticalPadding: Style.space(3)
-                tooltipText: "Apply the selected layout"
-                onClicked: root.applyProfile(root.activeProfile)
-              }
+                Dropdown {
+                  id: profileDrop
+                  visible: root.profiles.length > 1
+                  width: parent.width
+                  showLabel: false
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  value: root.activeProfile
+                  options: Model.profileOptions(root.profiles)
+                  onChanged: function(v) { if (v) root.applyProfile(v) }
+                }
 
-              Button {
-                visible: !root.namingProfile
-                text: "Save"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                horizontalPadding: Style.space(10)
-                verticalPadding: Style.space(3)
-                onClicked: root.beginSave()
-              }
-
-              Button {
-                visible: !root.namingProfile && root.profiles.length > 0
-                text: "Delete"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                horizontalPadding: Style.space(10)
-                verticalPadding: Style.space(3)
-                onClicked: root.deleteProfile()
-              }
-
-              Button {
-                visible: !root.namingProfile
-                text: root.autoSwitch ? "On connect" : "Manual"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                active: root.autoSwitch
-                horizontalPadding: Style.space(10)
-                verticalPadding: Style.space(3)
-                tooltipText: root.autoSwitch
-                  ? "On: restore the matching saved layout when a display is plugged in"
-                  : "Off: leave the layout alone when a display is plugged in"
-                onClicked: root.setAutoSwitch(!root.autoSwitch)
+                Button {
+                  id: profileSolo
+                  visible: root.profiles.length === 1
+                  width: Math.min(implicitWidth, parent.width)
+                  text: root.firstProfileName()
+                  fontSize: Style.font.caption
+                  fontFamily: root.bar.fontFamily
+                  foreground: root.bar.foreground
+                  bordered: true
+                  active: true
+                  horizontalPadding: Style.space(10)
+                  verticalPadding: Style.space(3)
+                  tooltipText: "Apply this saved layout"
+                  onClicked: root.applyProfile(root.firstProfileName())
+                }
               }
             }
 
@@ -2346,20 +2408,135 @@ Panel {
 
           }
 
-          Toggle {
+          Item {
             width: parent.width
-            label: "Spread workspaces"
-            description: root.workspaceDescription()
-            checked: root.manageWorkspaces
-            foreground: root.bar.foreground
-            fontFamily: root.bar.fontFamily
-            onClicked: root.setManageWorkspaces(!root.manageWorkspaces)
+            implicitHeight: Math.max(spreadToggle.implicitHeight, wsMenuBtn.implicitHeight)
+
+            Toggle {
+              id: spreadToggle
+              anchors.left: parent.left
+              anchors.right: wsMenuBtn.visible ? wsMenuBtn.left : parent.right
+              anchors.rightMargin: wsMenuBtn.visible ? Style.space(6) : 0
+              anchors.verticalCenter: parent.verticalCenter
+              label: "Spread workspaces"
+              description: root.workspaceDescription()
+              checked: root.manageWorkspaces
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              onClicked: root.setManageWorkspaces(!root.manageWorkspaces)
+            }
+
+            Button {
+              id: wsMenuBtn
+              visible: root.manageWorkspaces
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.workspacesOpen ? "Done" : "Assign"
+              fontSize: Style.font.caption
+              fontFamily: root.bar.fontFamily
+              foreground: root.bar.foreground
+              bordered: true
+              active: root.workspacesOpen
+              horizontalPadding: Style.space(10)
+              verticalPadding: Style.space(4)
+              tooltipText: root.workspacesOpen
+                ? "Hide pinning and the workspace count"
+                : "Pin workspaces to screens and set how many to manage"
+              onClicked: {
+                root.workspacesOpen = !root.workspacesOpen
+                if (root.workspacesOpen)
+                  Qt.callLater(function() { root.revealItem(workspaceSection) })
+              }
+            }
           }
 
           Column {
+            id: workspaceSection
             width: parent.width
             spacing: Style.space(8)
-            visible: root.manageWorkspaces
+            visible: root.manageWorkspaces && root.workspacesOpen
+
+            Column {
+              width: parent.width
+              spacing: Style.space(2)
+
+              Item {
+                width: parent.width
+                implicitHeight: Math.max(wsTotalLabel.implicitHeight, wsTotalValue.implicitHeight)
+
+                PanelSectionHeader {
+                  id: wsTotalLabel
+                  text: "TOTAL WORKSPACES"
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  id: wsTotalValue
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: String(Model.clampWorkspaceTotal(root.workspacesTotal))
+                  color: root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+              }
+
+              WheelSafeSlider {
+                width: parent.width
+                bar: root.bar
+                minimum: 1
+                maximum: 99
+                step: 1
+                integer: true
+                value: root.workspacesTotal
+                onReleased: function(v) { root.setWorkspacesTotal(v) }
+              }
+
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "Omarchy's Super+1–0 keys cover 1–10. Extra workspaces stay on the bar, Super+Tab, and Super+wheel. 10 per screen is "
+                  + Model.defaultWorkspaceTotal(root.enabledCount) + "."
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              Button {
+                width: (parent.width - parent.spacing) / 2
+                text: "10 per screen"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(4)
+                tooltipText: "Set the total to 10 workspaces on each enabled display"
+                onClicked: root.tenPerScreen()
+              }
+
+              Button {
+                width: (parent.width - parent.spacing) / 2
+                text: "Split evenly"
+                fontSize: Style.font.caption
+                fontFamily: root.bar.fontFamily
+                foreground: root.bar.foreground
+                bordered: true
+                horizontalPadding: Style.space(10)
+                verticalPadding: Style.space(4)
+                tooltipText: "Give the primary screen the first block, then split the rest left to right"
+                onClicked: root.autoSplitWorkspaces()
+              }
+            }
 
             Column {
               width: parent.width
@@ -2406,12 +2583,12 @@ Panel {
                   elide: Text.ElideRight
                 }
 
-                Row {
-                  anchors.horizontalCenter: parent.horizontalCenter
+                Flow {
+                  width: parent.width
                   spacing: Style.space(4)
 
                   Repeater {
-                    model: 10
+                    model: Model.clampWorkspaceTotal(root.workspacesTotal)
 
                     Item {
                       id: wsCell
@@ -2424,7 +2601,7 @@ Panel {
                         var holder = root.workspaceHolderId(wid)
                         return holder !== "" && holder !== (mon ? mon.name : "")
                       }
-                      width: Style.space(22)
+                      width: wsCell.wid >= 11 ? Style.space(28) : Style.space(22)
                       height: Style.space(22)
 
                       Rectangle {
@@ -2460,37 +2637,21 @@ Panel {
               }
             }
 
-            Column {
+            Text {
               width: parent.width
-              spacing: Style.space(6)
-
-              Text {
-                width: parent.width
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.Wrap
-                text: {
-                  var ids = root.unassignedWorkspaceIds()
-                  if (!ids.length) return "All 1–10 assigned."
-                  if (ids.length === 10) return "No workspaces assigned — they show on the screen where they currently live."
-                  return "Unassigned: " + ids.map(Model.workspaceDigit).join(", ")
-                    + " — still shown on the screen where they live."
-                }
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.Wrap
+              text: {
+                var ids = root.unassignedWorkspaceIds()
+                var total = Model.clampWorkspaceTotal(root.workspacesTotal)
+                if (!ids.length) return "All 1–" + total + " assigned."
+                if (ids.length === total) return "No workspaces assigned — they show on the screen where they currently live."
+                return "Unassigned: " + ids.map(Model.workspaceDigit).join(", ")
+                  + " — still shown on the screen where they live."
               }
-
-              Button {
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: "Split evenly"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                horizontalPadding: Style.space(10)
-                verticalPadding: Style.space(4)
-                onClicked: root.autoSplitWorkspaces()
-              }
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
             }
           }
 
@@ -3379,79 +3540,81 @@ Panel {
     function close() { root.layoutMenuOpen = false }
   }
 
-  Item {
-    id: layoutMenuDummy
-    width: 1
-    height: 1
-    visible: false
+  Loader {
+    active: root.layoutMenuOpen && !!root.layoutMenuAnchor
+    sourceComponent: Component {
+      WorkspaceLayoutMenu {
+        anchorItem: root.layoutMenuAnchor
+        bar: root.bar
+        owner: layoutMenuOwner
+        open: true
+        workspaceId: root.layoutMenuWorkspace
+        currentLayout: String(root.workspaceLayouts[String(root.layoutMenuWorkspace)] || "tile")
+        onChosen: function(mode) { root.setWorkspaceLayout(root.layoutMenuWorkspace, mode) }
+      }
+    }
   }
 
-  WorkspaceLayoutMenu {
-    anchorItem: root.layoutMenuAnchor || layoutMenuDummy
-    bar: root.bar
-    owner: layoutMenuOwner
-    open: root.layoutMenuOpen && !!root.layoutMenuAnchor
-    workspaceId: root.layoutMenuWorkspace
-    currentLayout: String(root.workspaceLayouts[String(root.layoutMenuWorkspace)] || "tile")
-    onChosen: function(mode) { root.setWorkspaceLayout(root.layoutMenuWorkspace, mode) }
-  }
+  Loader {
+    active: root.identifying && !!root.identifyScreen
+    sourceComponent: Component {
+      PanelWindow {
+        screen: root.identifyScreen
+        visible: true
+        color: "transparent"
+        anchors { top: true; bottom: true; left: true; right: true }
+        exclusionMode: ExclusionMode.Ignore
+        mask: Region {}
+        WlrLayershell.namespace: "im0001gt.screens-identify"
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
 
-  PanelWindow {
-    id: identWin
-    visible: root.identifying && !!root.identifyScreen
-    screen: root.identifyScreen || (Quickshell.screens.length ? Quickshell.screens[0] : null)
-    color: "transparent"
-    anchors { top: true; bottom: true; left: true; right: true }
-    exclusionMode: ExclusionMode.Ignore
-    mask: Region {}
-    WlrLayershell.namespace: "im0001gt.screens-identify"
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+        BorderSurface {
+          anchors.centerIn: parent
+          implicitWidth: identCol.implicitWidth + Style.space(48)
+          implicitHeight: identCol.implicitHeight + Style.space(36)
+          color: Color.popups.background
+          borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+          radius: Style.cornerRadius
 
-    BorderSurface {
-      anchors.centerIn: parent
-      implicitWidth: identCol.implicitWidth + Style.space(48)
-      implicitHeight: identCol.implicitHeight + Style.space(36)
-      color: Color.popups.background
-      borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
-      radius: Style.cornerRadius
+          Column {
+            id: identCol
+            anchors.centerIn: parent
+            spacing: Style.space(6)
 
-      Column {
-        id: identCol
-        anchors.centerIn: parent
-        spacing: Style.space(6)
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: String(root.selectedIndex + 1)
+              color: root.bar ? root.bar.foreground : Color.foreground
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.displayLarge
+              font.bold: true
+            }
 
-        Text {
-          anchors.horizontalCenter: parent.horizontalCenter
-          text: String(root.selectedIndex + 1)
-          color: root.bar ? root.bar.foreground : Color.foreground
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.displayLarge
-          font.bold: true
-        }
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: root.selected ? root.selected.label : ""
+              color: root.bar ? root.bar.foreground : Color.foreground
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.title
+              font.bold: true
+            }
 
-        Text {
-          anchors.horizontalCenter: parent.horizontalCenter
-          text: root.selected ? root.selected.label : ""
-          color: root.bar ? root.bar.foreground : Color.foreground
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.title
-          font.bold: true
-        }
-
-        Text {
-          anchors.horizontalCenter: parent.horizontalCenter
-          text: root.selected ? root.selected.name : ""
-          color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.4)
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.body
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: root.selected ? root.selected.name : ""
+              color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.4)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.body
+            }
+          }
         }
       }
     }
   }
 
   Variants {
-    model: Quickshell.screens
+    model: root.standbyNames.length ? Quickshell.screens : []
 
     PanelWindow {
       required property var modelData

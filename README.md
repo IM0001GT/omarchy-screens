@@ -10,7 +10,7 @@ Click the two-tile mark for a panel that stays open. Displays are drawn at their
 
 | Layout | This screen | Night Light | HDR | Profiles | Workspaces | Pixel Care |
 | --- | --- | --- | --- | --- | --- | --- |
-| Drag tiles; edges snap, neighbours reflow. Apply, then 20s Keep / Revert | Brightness (optional all-monitors), text size, resolution, Hz, scale slider, rotation, mirror, Detect | 1500K–6500K Kelvin slider and on/off, same hyprsunset temps as Omarchy | 8-bit or 10-bit PQ on HDR panels, Tune for black / peak | Name a desk; restore on connect | Optional spread of 1–10; right-click name, icon, Tile / Scroll / Float | Optional 0–100% bar dim, hover lift, no black veil |
+| Drag tiles; edges snap, neighbours reflow. Apply, then 20s Keep / Revert | Brightness (optional all-monitors), text size, resolution, Hz, scale slider, rotation, mirror, Detect | 1500K–6500K Kelvin slider and on/off, same hyprsunset temps as Omarchy | 8-bit or 10-bit PQ on HDR panels, Tune for black / peak | Name a desk; restore on connect | Optional spread; Assign menu for count (default 10, up to 99, 10-per-screen preset) and per-screen pins | Optional 0–100% bar dim, hover lift, no black veil |
 
 Works with two screens or a full battlestation. A fallback Hyprland rule still catches anything you hot-plug later. The panel scrolls when it is taller than the screen, so controls stay reachable at large scale (for example 2× on 1080p).
 
@@ -82,14 +82,16 @@ If [HyprMod](https://github.com/BlueManCZ/hyprmod) is managing displays, its `hy
 
 **Workspaces**
 
-- **Spread workspaces** pins ten workspaces across the screens that are on and not mirroring. Omarchy 4.0.3 no longer lets a plugin register a second bar widget at runtime, so Screens installs a companion plugin (`im0001gt.screens.workspaces`) next to this one. You still only add Screens; spreading swaps that companion onto the bar in place of stock Workspaces.
-- Two screens: primary gets **1–5**, the next screen gets **6–10**. More screens split the ten as evenly as possible (a leftover slot goes to the first screens). Nine screens means one gets two workspaces and the rest get one
+- **Spread workspaces** pins workspaces across the screens that are on and not mirroring. Omarchy 4.0.3 no longer lets a plugin register a second bar widget at runtime, so Screens installs a companion plugin (`im0001gt.screens.workspaces`) next to this one. You still only add Screens; spreading swaps that companion onto the bar in place of stock Workspaces.
+- Default is still **10** workspaces. **Assign** (next to the spread toggle) opens the pinning UI so the main panel stays short until you need it
+- **Total** can go to 99. **10 per screen** sets 10 on each enabled display (2 screens → 20). Omarchy’s Super+1–0 keys still jump 1–10; extras are on the bar, Super+Tab, and Super+wheel
+- Two screens at the default 10: primary gets **1–5**, the next screen gets **6–10**. More screens split the total as evenly as possible (leftover slots go to the first screens)
 - **Make primary** chooses which screen receives the first group
 - Each display's bar then shows only that screen's numbers. **Left-click** a number to go there. **Right-click** that same number to **name** it, pick an **icon**, or set **Tile**, **Scroll**, or **Float**. Those choices apply only to that workspace
 - If the active workspace has a name, it appears as a chip next to the numbers
-- **Assign by monitor** — with spread on, **ASSIGNED WORKSPACES** lists every screen that is on and not mirroring. Tap a digit to pin that workspace to the screen. A workspace you leave unassigned still shows on the screen where it currently lives, dimmed. Assignment comes from [Titanium-Mothy](https://github.com/Titanium-Mothy)
+- **Assign by monitor** — tap a digit to pin that workspace to the screen. A workspace you leave unassigned still shows on the screen where it currently lives, dimmed. Assignment comes from [Titanium-Mothy](https://github.com/Titanium-Mothy)
 - **Split evenly** rebuilds the automatic split (primary first) and replaces a custom plan
-- Turning the toggle off restores Omarchy's stock workspace widget and leaves windows where they are
+- Turning the toggle off restores Omarchy's stock workspace widget and leaves windows where they are. Shrinking the total moves windows off workspaces you no longer manage so they cannot stick around like a stray 11
 
 **Profiles**
 
@@ -120,6 +122,8 @@ omarchy restart shell
 
 **1.13.1** keeps the workspaces companion parent and destination directory descriptors open through rename and recursive cleanup, so a path swap between check and replace cannot redirect the delete.
 
+**1.14.0** stops Screens from corrupting other Omarchy menus while the panel is closed. Sliders are drag-only (click, then arrows / Home / End for a fine nudge) so scrolling the panel cannot grab them. Workspace spreading can go past 1–10 (default still 10, cap 99, **10 per screen** preset); extra IDs show on the bar, Super+Tab, and Super+wheel. Omarchy’s Super+1–0 keys still jump 1–10. Pinning and the count sit behind **Assign** next to Spread workspaces. Long profile names elide instead of clipping Save / Delete / On connect. First-install backup/restore covers workspace-layout files 1–99. **Workspace count past 1–10** comes from [joewinke](https://github.com/joewinke).
+
 ## Uninstall
 
 Restore the pre-Screens files first, then remove the plugin:
@@ -129,7 +133,7 @@ Restore the pre-Screens files first, then remove the plugin:
 omarchy plugin remove im0001gt.screens
 ```
 
-That puts back `monitors.lua`, `bindings.lua`, `shell.json`, and any workspace-layout files Screens captured, then removes the scale-key block, the brightness wrapper Screens added, and the generated `im0001gt.screens.workspaces` companion plugin.
+That puts back `monitors.lua`, `bindings.lua`, `shell.json`, and any workspace-layout files Screens captured (including IDs above 10), then removes the scale-key block, the brightness wrapper Screens added, and the generated `im0001gt.screens.workspaces` companion plugin.
 
 Omarchy does not run an uninstall hook. If the plugin is already gone, the same restore still works from the first-install copy (it survives `plugin remove` and is independent of Timeshift or other system snapshots):
 
@@ -146,8 +150,8 @@ Plugins run as unsandboxed code inside `omarchy-shell`. Screens does not use the
 - `~/.config/hypr/monitors.lua` — layout, scale, HDR, VRR
 - `~/.config/hypr/bindings.lua` — Super+/ and Super+Alt+/ scale keys
 - `~/.config/omarchy/shell.json` — only if you turn on workspace spreading, to swap the workspace widget
-- `~/.local/state/omarchy/workspace-layouts/` — Tile / Scroll / Float per workspace
-- `~/.local/state/im0001gt.screens/` — profiles, backups, Pixel Care settings (`bar-care.json`), and the restore helper
+- `~/.local/state/omarchy/workspace-layouts/` — Tile / Scroll / Float per workspace (1–99 when you raise the total)
+- `~/.local/state/im0001gt.screens/` — profiles, backups, Pixel Care settings (`bar-care.json`), workspace assignment (`workspaces.json`), and the restore helper
 
 ## Requirements
 
@@ -177,7 +181,9 @@ The repo root **is** the plugin. That is what `omarchy plugin add` and `omarchy 
 
 **Night Light** (Kelvin slider and on/off) and **All monitors** brightness were contributed by [sunshine144](https://github.com/sunshine144).
 
-**Assign by monitor** (tap 1–10 onto each screen, Split evenly, unassigned digits stay dimmed on the bar) was contributed by [Titanium-Mothy](https://github.com/Titanium-Mothy).
+**Assign by monitor** (tap digits onto each screen, Split evenly, unassigned digits stay dimmed on the bar) was contributed by [Titanium-Mothy](https://github.com/Titanium-Mothy).
+
+**Workspace count past 1–10** (total slider, 10-per-screen, IDs that still render above 10) was contributed by [joewinke](https://github.com/joewinke).
 
 ## License
 

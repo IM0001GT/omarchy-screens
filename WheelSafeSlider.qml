@@ -1,8 +1,8 @@
 import QtQuick
 import qs.Commons
 
-// Plugin-local slider. Wheel only changes the value when the pointer is on
-// the track and the panel is not already scrolling.
+// Plugin-local slider. Drag or focused arrow keys change the value; the
+// wheel always scrolls the panel instead.
 Item {
   id: root
 
@@ -21,6 +21,7 @@ Item {
   property real liveValue: value
   property int tickCount: 0
   property color tickColor: bar ? bar.background : Color.background
+  property bool keyAdjust: true
 
   onValueChanged: if (!dragging) liveValue = value
 
@@ -30,24 +31,50 @@ Item {
 
   implicitWidth: Style.space(200)
   implicitHeight: Math.max(Style.space(22), knobSize + Style.spacing.md)
+  activeFocusOnTab: true
 
   readonly property real range: Math.max(0.0001, maximum - minimum)
   readonly property real progress: Math.max(0, Math.min(1, (liveValue - minimum) / range))
-  readonly property bool _hot: mouseArea.containsMouse || root.dragging
+  readonly property bool _hot: mouseArea.containsMouse || root.dragging || root.activeFocus
 
-  function panelIsScrolling() {
-    var p = parent
-    while (p) {
-      if (p.panelScrolling === true) return true
-      p = p.parent
-    }
-    return false
+  function clampValue(v) {
+    var next = Math.max(root.minimum, Math.min(root.maximum, v))
+    if (root.integer) next = Math.round(next)
+    return next
   }
 
-  function nearTrack(y) {
-    var mid = height / 2
-    var slop = Math.max(root.knobSize * 0.65, Style.space(8))
-    return Math.abs(y - mid) <= slop
+  function applyValue(next, commit) {
+    next = root.clampValue(next)
+    root.liveValue = next
+    root.moved(next)
+    if (commit) root.released(next)
+  }
+
+  function nudge(dir) {
+    root.applyValue(root.liveValue + dir * root.step, true)
+  }
+
+  Keys.onPressed: function(event) {
+    if (event.key === Qt.Key_Left || event.key === Qt.Key_Down || event.key === Qt.Key_Minus) {
+      root.nudge(-1)
+      event.accepted = true
+      return
+    }
+    if (event.key === Qt.Key_Right || event.key === Qt.Key_Up
+        || event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) {
+      root.nudge(1)
+      event.accepted = true
+      return
+    }
+    if (event.key === Qt.Key_Home) {
+      root.applyValue(root.minimum, true)
+      event.accepted = true
+      return
+    }
+    if (event.key === Qt.Key_End) {
+      root.applyValue(root.maximum, true)
+      event.accepted = true
+    }
   }
 
   Rectangle {
@@ -127,6 +154,7 @@ Item {
 
     onPressed: function(mouse) {
       if (mouse.button !== Qt.LeftButton) return
+      root.forceActiveFocus()
       root.dragging = true
       var next = valueFromX(mouse.x)
       root.liveValue = next
@@ -148,16 +176,7 @@ Item {
       root.liveValue = root.value
     }
     onWheel: function(wheel) {
-      if (root.panelIsScrolling() || !root.nearTrack(wheel.y)) {
-        wheel.accepted = false
-        return
-      }
-      var delta = wheel.angleDelta.y > 0 ? root.step : -root.step
-      var next = Math.max(root.minimum, Math.min(root.maximum, root.liveValue + delta))
-      if (root.integer) next = Math.round(next)
-      root.liveValue = next
-      root.moved(next)
-      root.released(next)
+      wheel.accepted = false
     }
   }
 }
