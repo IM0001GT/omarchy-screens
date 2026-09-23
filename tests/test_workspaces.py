@@ -1048,12 +1048,14 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
                 text = fh.read()
             with open(os.path.join(self.src, name), "w", encoding="utf-8") as fh:
                 fh.write(text)
+        with open(os.path.join(ROOT, "manifest.json"), encoding="utf-8") as fh:
+            self.screens_version = json.load(fh)["version"]
         with open(os.path.join(self.src, "manifest.json"), "w", encoding="utf-8") as fh:
             json.dump({
                 "schemaVersion": 1,
                 "id": "im0001gt.screens",
                 "name": "Screens",
-                "version": "1.14.0",
+                "version": self.screens_version,
                 "kinds": ["bar-widget", "service"],
                 "entryPoints": {"barWidget": "Screens.qml", "service": "Service.qml"},
             }, fh)
@@ -1075,7 +1077,7 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
         with open(manifest_path, encoding="utf-8") as fh:
             manifest = json.load(fh)
         self.assertEqual(manifest["id"], "im0001gt.screens.workspaces")
-        self.assertEqual(manifest["version"], "1.14.0")
+        self.assertEqual(manifest["version"], self.screens_version)
         self.assertEqual(manifest["kinds"], ["bar-widget"])
         self.assertEqual(manifest["entryPoints"]["barWidget"], "Workspaces.qml")
         self.assertEqual(manifest["barWidget"]["displayName"], "Screens workspaces")

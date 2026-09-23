@@ -123,9 +123,9 @@ omarchy restart shell
 
 **1.13.1** keeps the workspaces companion parent and destination directory descriptors open through rename and recursive cleanup, so a path swap between check and replace cannot redirect the delete.
 
-**1.15.0** keeps a saved display mode across sleep. Hyprland's `FALLBACK` placeholder is not written into `monitors.lua`, and an external rule you already applied stays there while that panel is in DPMS. Spread workspaces still shows numbers on the laptop after you undock: pins for a monitor that is gone are treated as unassigned until it returns, and a sync while undocked does not throw those pins away. Monitor names drawn from Hyprland / EDID are plain text. Thanks to [lixenstrand](https://github.com/lixenstrand) and [BVisagie](https://github.com/BVisagie) for the reports.
-
 **1.14.0** stops Screens from corrupting other Omarchy menus while the panel is closed. Sliders are drag-only (click, then arrows / Home / End for a fine nudge) so scrolling the panel cannot grab them. Workspace spreading can go past 1–10 (default still 10, cap 99, **10 per screen** preset); extra IDs show on the bar, Super+Tab, and Super+wheel. Omarchy’s Super+1–0 keys still jump 1–10. Pinning and the count sit behind **Assign** next to Spread workspaces. Long profile names elide instead of clipping Save / Delete / On connect. First-install backup/restore covers workspace-layout files 1–99. **Workspace count past 1–10** comes from [joewinke](https://github.com/joewinke).
+
+**1.15.0** keeps a saved display mode across sleep. Hyprland’s `FALLBACK` placeholder is not written into `monitors.lua`, and an external rule you already applied stays there while that panel is in DPMS. Spread workspaces still shows numbers on the laptop after you undock: pins for a monitor that is gone are treated as unassigned until it returns, and a sync while undocked does not throw those pins away. Monitor names drawn from Hyprland / EDID are plain text. Thanks to [lixenstrand](https://github.com/lixenstrand) and [BVisagie](https://github.com/BVisagie) for the reports.
 
 ## Uninstall
 
