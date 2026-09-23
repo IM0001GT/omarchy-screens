@@ -41,11 +41,29 @@ BarWidget {
     return ""
   }
 
+  function connectedMonitorNames() {
+    var mons = (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values : []
+    var names = []
+    var i, name
+    for (i = 0; i < mons.length; i++) {
+      name = mons[i] && mons[i].name ? String(mons[i].name) : ""
+      if (name && names.indexOf(name) === -1) names.push(name)
+    }
+    return names
+  }
+
   function assignedIds() {
     var mons = (root.assignment && root.assignment.monitors) ? root.assignment.monitors : []
+    var present = root.connectedMonitorNames()
+    // An empty Hyprland list means the compositor has not reported yet.
+    // Once it has, ids pinned to a monitor that is gone are unassigned
+    // and show on the screen where they currently live.
+    var gate = present.length > 0
     var all = []
-    var i, j
+    var i, j, name
     for (i = 0; i < mons.length; i++) {
+      name = mons[i] && mons[i].name ? String(mons[i].name) : ""
+      if (gate && present.indexOf(name) === -1) continue
       var ids = (mons[i] && mons[i].ids) || []
       for (j = 0; j < ids.length; j++) {
         if (all.indexOf(ids[j]) === -1) all.push(ids[j])

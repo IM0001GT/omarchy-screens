@@ -65,6 +65,7 @@ If [HyprMod](https://github.com/BlueManCZ/hyprmod) is managing displays, its `hy
 - **Night Light** sits under brightness: on/off plus a 1500K–6500K slider. It uses the same hyprsunset temperatures as `omarchy toggle nightlight` (4000K on, 6500K off) and refreshes the bar indicator
 - Text size uses Omarchy's 9–20 px stops and applies to the shell, GTK, and terminals
 - Laptop built-in panels are written as `eDP-1` / `LVDS` / `DSI` so Omarchy's clamshell helper keeps your scale instead of forcing 2. Turning the laptop panel off uses Omarchy's overlay toggle, not a named `disabled = true` in `monitors.lua`, so unplugging the last external display brings the built-in panel back
+- Sleep and DPMS can make Hyprland invent a `FALLBACK` output (1080p @ 60). Screens does not write that into `monitors.lua`. A display you already applied stays in the file, so it comes back at that mode and scale instead of `preferred`
 - Labels use Hyprland's model string
 
 **HDR and VRR**
@@ -89,7 +90,7 @@ If [HyprMod](https://github.com/BlueManCZ/hyprmod) is managing displays, its `hy
 - **Make primary** chooses which screen receives the first group
 - Each display's bar then shows only that screen's numbers. **Left-click** a number to go there. **Right-click** that same number to **name** it, pick an **icon**, or set **Tile**, **Scroll**, or **Float**. Those choices apply only to that workspace
 - If the active workspace has a name, it appears as a chip next to the numbers
-- **Assign by monitor** — tap a digit to pin that workspace to the screen. A workspace you leave unassigned still shows on the screen where it currently lives, dimmed. Assignment comes from [Titanium-Mothy](https://github.com/Titanium-Mothy)
+- **Assign by monitor** — tap a digit to pin that workspace to the screen. A workspace you leave unassigned still shows on the screen where it currently lives, dimmed. If the screen it was pinned to is unplugged, those numbers stay on the display Hyprland moved them to, dimmed, until that screen comes back. Assignment comes from [Titanium-Mothy](https://github.com/Titanium-Mothy)
 - **Split evenly** rebuilds the automatic split (primary first) and replaces a custom plan
 - Turning the toggle off restores Omarchy's stock workspace widget and leaves windows where they are. Shrinking the total moves windows off workspaces you no longer manage so they cannot stick around like a stray 11
 
@@ -121,6 +122,8 @@ omarchy restart shell
 **1.13.0** adds per-screen workspace pinning on top of the 1.12 fixes. HDR Off no longer writes a bare `cm = "hdr"` line. Dock/resume no longer leaves a stray workspace like 11. Apply/Keep sits in a sticky footer. Sliders ignore the wheel unless the pointer is on the track. **Assign by monitor** comes from [Titanium-Mothy](https://github.com/Titanium-Mothy).
 
 **1.13.1** keeps the workspaces companion parent and destination directory descriptors open through rename and recursive cleanup, so a path swap between check and replace cannot redirect the delete.
+
+**1.15.0** keeps a saved display mode across sleep. Hyprland's `FALLBACK` placeholder is not written into `monitors.lua`, and an external rule you already applied stays there while that panel is in DPMS. Spread workspaces still shows numbers on the laptop after you undock: pins for a monitor that is gone are treated as unassigned until it returns, and a sync while undocked does not throw those pins away. Monitor names drawn from Hyprland / EDID are plain text. Thanks to [lixenstrand](https://github.com/lixenstrand) and [BVisagie](https://github.com/BVisagie) for the reports.
 
 **1.14.0** stops Screens from corrupting other Omarchy menus while the panel is closed. Sliders are drag-only (click, then arrows / Home / End for a fine nudge) so scrolling the panel cannot grab them. Workspace spreading can go past 1–10 (default still 10, cap 99, **10 per screen** preset); extra IDs show on the bar, Super+Tab, and Super+wheel. Omarchy’s Super+1–0 keys still jump 1–10. Pinning and the count sit behind **Assign** next to Spread workspaces. Long profile names elide instead of clipping Save / Delete / On connect. First-install backup/restore covers workspace-layout files 1–99. **Workspace count past 1–10** comes from [joewinke](https://github.com/joewinke).
 

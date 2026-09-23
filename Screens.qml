@@ -1696,6 +1696,7 @@ Panel {
               }
 
               Text {
+                textFormat: Text.PlainText
                 text: (root.dragging ? "Snapping edges"
                   : (brightnessSlider && brightnessSlider.dragging)
                     ? Model.brightnessName(brightnessSlider.liveValue)
@@ -2136,6 +2137,7 @@ Panel {
                   anchors.right: offBtn.left
                   anchors.rightMargin: Style.space(8)
                   anchors.verticalCenter: parent.verticalCenter
+                  textFormat: Text.PlainText
                   text: (mon ? (mon.label || mon.name) : "") + " · Off"
                   color: root.bar.foreground
                   font.family: root.bar.fontFamily
@@ -2162,6 +2164,7 @@ Panel {
             Text {
               visible: root.disabledCount < 1 && root.detectNote !== ""
               width: parent.width
+              textFormat: Text.PlainText
               text: root.detectNote
               color: Qt.darker(root.bar.foreground, 1.4)
               font.family: root.bar.fontFamily
@@ -2259,6 +2262,7 @@ Panel {
                     Text {
                       width: parent.width
                       horizontalAlignment: Text.AlignHCenter
+                      textFormat: Text.PlainText
                       text: mon ? mon.label : ""
                       color: Qt.darker(root.bar.foreground, 1.25)
                       font.family: root.bar.fontFamily
@@ -2575,6 +2579,7 @@ Panel {
                 Text {
                   width: parent.width
                   horizontalAlignment: Text.AlignHCenter
+                  textFormat: Text.PlainText
                   text: wsRow.mon ? (wsRow.mon.label || wsRow.mon.name) : ""
                   color: root.bar.foreground
                   font.family: root.bar.fontFamily
@@ -2668,6 +2673,7 @@ Panel {
 
               PanelSectionHeader {
                 id: selHeader
+                textFormat: Text.PlainText
                 text: root.selected ? root.selected.label : "THIS SCREEN"
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
@@ -2677,6 +2683,7 @@ Panel {
 
               Text {
                 id: selName
+                textFormat: Text.PlainText
                 text: root.selected ? root.selected.name : ""
                 color: Qt.darker(root.bar.foreground, 1.4)
                 font.family: root.bar.fontFamily
@@ -3593,6 +3600,7 @@ Panel {
 
             Text {
               anchors.horizontalCenter: parent.horizontalCenter
+              textFormat: Text.PlainText
               text: root.selected ? root.selected.label : ""
               color: root.bar ? root.bar.foreground : Color.foreground
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -3602,6 +3610,7 @@ Panel {
 
             Text {
               anchors.horizontalCenter: parent.horizontalCenter
+              textFormat: Text.PlainText
               text: root.selected ? root.selected.name : ""
               color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.4)
               font.family: root.bar ? root.bar.fontFamily : Style.font.family

@@ -156,6 +156,28 @@ class WorkspacePlan(unittest.TestCase):
         self.assertEqual(by_name["HDMI-A-1"], [1, 2, 20])
         self.assertEqual(by_name["DP-4"], [11, 12])
 
+    def test_undock_keeps_pins_for_absent_monitors(self):
+        self.ctl.write_workspaces_json(True, [
+            {"name": "DVI-I-2", "identity": "desc:Samsung A", "label": "Samsung A", "ids": [1, 2, 3, 4, 5]},
+            {"name": "DVI-I-1", "identity": "desc:Samsung B", "label": "Samsung B", "ids": [6, 7, 8, 9, 10]},
+            {"name": "eDP-1", "identity": "desc:Sharp", "label": "Sharp", "ids": []},
+        ], {})
+        laptop = {
+            "name": "eDP-1",
+            "identity": "desc:Sharp",
+            "description": "Sharp",
+            "enabled": True,
+            "x": 0,
+            "y": 0,
+            "label": "Sharp",
+            "mirror": "",
+        }
+        plan = self.ctl.plan_for_write([laptop])
+        by_name = {p["name"]: p["ids"] for p in plan}
+        self.assertEqual(by_name["eDP-1"], [])
+        self.assertEqual(by_name["DVI-I-2"], [1, 2, 3, 4, 5])
+        self.assertEqual(by_name["DVI-I-1"], [6, 7, 8, 9, 10])
+
     def test_total_is_clamped(self):
         self.assertEqual(self.ctl.clamp_workspace_total(999), self.ctl.WORKSPACE_TOTAL_CAP)
         self.assertEqual(self.ctl.clamp_workspace_total(0), 1)
@@ -1255,6 +1277,243 @@ class DeskLayoutMerge(unittest.TestCase):
         ids = [e.get("id") for e in store.get("deskLayout") or []]
         self.assertIn("desc:LG Electronics LG HDR 4K 0x0006B200", ids)
         self.assertEqual(len(store.get("lastLayout") or []), 1)
+
+
+class PlaceholderOutputs(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.ctl = load_ctl()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ctl.BACKUP_DIR = self.tmp.name
+        self.ctl.PROFILES_PATH = os.path.join(self.tmp.name, "profiles.json")
+        self.ctl.MONITORS_LUA = os.path.join(self.tmp.name, "monitors.lua")
+        self.ctl.ORIGINAL_BACKUP = os.path.join(self.tmp.name, "original-monitors.lua")
+        self.odyssey = "desc:Samsung Electric Company Odyssey G80SD H1AK500000"
+        self.laptop_id = "desc:Sharp Corporation 0x14CB"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_dummy_names_are_not_connectors(self):
+        self.assertTrue(self.ctl.is_dummy_name("FALLBACK"))
+        self.assertTrue(self.ctl.is_dummy_name("fallback"))
+        self.assertTrue(self.ctl.is_dummy_name("HEADLESS-2"))
+        self.assertTrue(self.ctl.is_dummy_name("UNKNOWN"))
+        self.assertFalse(self.ctl.is_dummy_name("DP-1"))
+        self.assertFalse(self.ctl.is_dummy_name("eDP-1"))
+        self.assertFalse(self.ctl.is_dummy_name("HDMI-A-1"))
+        self.assertEqual(self.ctl.clean_connector("FALLBACK"), "")
+        self.assertEqual(self.ctl.monitor_lua({"name": "FALLBACK", "enabled": True, "mode": "1920x1080@60"}, set()), "")
+
+    def test_placeholder_write_keeps_saved_external_mode(self):
+        self.ctl.save_store({
+            "deskLayout": [
+                {
+                    "id": self.odyssey,
+                    "enabled": True,
+                    "mode": "3840x2160@239.91",
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.5,
+                    "vrr": 0,
+                    "mirror": "",
+                },
+                {
+                    "id": self.laptop_id,
+                    "enabled": True,
+                    "mode": "2560x1600@120.00",
+                    "x": 3840,
+                    "y": 0,
+                    "scale": 1.6,
+                    "vrr": 0,
+                    "mirror": "",
+                },
+            ]
+        })
+        text = self.ctl.write_monitors_lua([
+            {
+                "name": "FALLBACK",
+                "description": "",
+                "enabled": True,
+                "mode": "1920x1080@60.00",
+                "x": 0,
+                "y": 0,
+                "scale": 1,
+                "vrr": 0,
+            },
+            {
+                "name": "eDP-1",
+                "description": "Sharp Corporation 0x14CB",
+                "identity": self.laptop_id,
+                "enabled": True,
+                "mode": "2560x1600@120.00",
+                "x": 1920,
+                "y": 0,
+                "scale": 1.6,
+                "vrr": 0,
+            },
+        ], placeholder=True)
+        self.assertNotIn("FALLBACK", text)
+        self.assertIn(self.odyssey, text)
+        self.assertIn("3840x2160@239.91", text)
+        self.assertIn('position = "3840x0"', text)
+        self.assertNotIn('position = "1920x0"', text)
+        self.assertIn('scale = 1.5', text)
+
+    def test_replacing_the_desk_does_not_keep_the_old_screen(self):
+        self.ctl.save_store({
+            "deskLayout": [
+                {"id": "desc:Old Panel", "enabled": True, "mode": "1920x1080@60", "x": 0, "y": 0, "scale": 1, "mirror": ""},
+            ]
+        })
+        text = self.ctl.write_monitors_lua([
+            {
+                "name": "DP-1",
+                "description": "New Monitor",
+                "identity": "desc:New Monitor",
+                "enabled": True,
+                "mode": "2560x1440@144",
+                "x": 0,
+                "y": 0,
+                "scale": 1,
+                "vrr": 0,
+            },
+            {
+                "name": "eDP-1",
+                "description": "Sharp",
+                "identity": "desc:Sharp",
+                "enabled": True,
+                "mode": "1920x1200@60",
+                "x": 2560,
+                "y": 0,
+                "scale": 1,
+                "vrr": 0,
+            },
+        ])
+        self.assertNotIn("desc:Old Panel", text)
+        self.assertIn("DP-1", text)
+        self.assertIn("2560x1440@144", text)
+
+    def test_remember_layout_ignores_fallback(self):
+        self.ctl.save_store({
+            "deskLayout": [
+                {"id": "desc:LG", "enabled": True, "mode": "3840x2160@60", "x": 0, "y": 0, "scale": 2, "mirror": ""},
+                {"id": "desc:Sharp", "enabled": True, "mode": "1920x1200@60", "x": 1920, "y": 0, "scale": 1.5, "mirror": ""},
+            ]
+        })
+        self.ctl.remember_layout([
+            {"name": "FALLBACK", "description": "", "enabled": True, "mode": "1920x1080@60", "x": 0, "y": 0, "scale": 1},
+            {
+                "name": "eDP-1",
+                "description": "Sharp",
+                "identity": "desc:Sharp",
+                "enabled": True,
+                "mode": "1920x1200@60",
+                "x": 0,
+                "y": 0,
+                "scale": 1.5,
+            },
+        ])
+        store = self.ctl.load_store()
+        ids = [e.get("id") for e in store.get("deskLayout") or []]
+        self.assertIn("desc:LG", ids)
+        self.assertNotIn("FALLBACK", ids)
+        self.assertNotIn("desc:FALLBACK", ids)
+        self.assertEqual(len(store.get("lastLayout") or []), 1)
+
+    def _desk(self):
+        self.ctl.save_store({
+            "deskLayout": [
+                {
+                    "id": self.odyssey,
+                    "enabled": True,
+                    "mode": "3840x2160@239.91",
+                    "x": 0,
+                    "y": 0,
+                    "scale": 1.5,
+                    "vrr": 0,
+                    "mirror": "",
+                },
+                {
+                    "id": self.laptop_id,
+                    "enabled": True,
+                    "mode": "2560x1600@120.00",
+                    "x": 3840,
+                    "y": 0,
+                    "scale": 1.6,
+                    "vrr": 0,
+                    "mirror": "",
+                },
+            ]
+        })
+
+    def _laptop(self, enabled=True, x=1920):
+        return {
+            "name": "eDP-1",
+            "description": "Sharp Corporation 0x14CB",
+            "identity": self.laptop_id,
+            "enabled": enabled,
+            "mode": "2560x1600@120.00",
+            "x": x,
+            "y": 0,
+            "scale": 1.6,
+            "vrr": 0,
+        }
+
+    def test_recover_rewrites_a_fallback_file_from_the_saved_desk(self):
+        self._desk()
+        with open(self.ctl.MONITORS_LUA, "w", encoding="utf-8") as fh:
+            fh.write(
+                "-- BEGIN im0001gt.screens\n"
+                'hl.monitor({ output = "FALLBACK", mode = "1920x1080@60.00", position = "0x0", scale = 1.0, vrr = 0 })\n'
+                'hl.monitor({ output = "eDP-1", mode = "2560x1600@120.00", position = "1920x0", scale = 1.6, vrr = 0 })\n'
+                "-- END im0001gt.screens\n"
+            )
+        self.ctl.drm_connected_names = lambda: ["eDP-1"]
+        self.ctl.internal_toggle_active = lambda: False
+        self.ctl.set_internal_toggle = lambda disabled, mon=None: None
+        self.ctl.snapshot = lambda: {"placeholder": True, "monitors": [self._laptop(enabled=False)]}
+        reloads = []
+        self.ctl.reload_hypr = lambda: reloads.append("reload")
+        self.ctl.run = lambda cmd: None
+        self.assertEqual(self.ctl.recover_internal(quiet=True), 0)
+        with open(self.ctl.MONITORS_LUA, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertNotIn("FALLBACK", text)
+        self.assertIn(self.odyssey, text)
+        self.assertIn("3840x2160@239.91", text)
+        self.assertIn('position = "3840x0"', text)
+        self.assertEqual(reloads, ["reload"])
+
+    def test_recover_does_not_reload_when_the_saved_rule_is_already_there(self):
+        self._desk()
+        self.ctl.write_monitors_lua([
+            self._laptop(x=3840),
+            {
+                "name": "DP-1",
+                "description": "Samsung Electric Company Odyssey G80SD H1AK500000",
+                "identity": self.odyssey,
+                "enabled": True,
+                "mode": "3840x2160@239.91",
+                "x": 0,
+                "y": 0,
+                "scale": 1.5,
+                "vrr": 0,
+            },
+        ])
+        self.ctl.drm_connected_names = lambda: ["eDP-1"]
+        self.ctl.internal_toggle_active = lambda: False
+        self.ctl.set_internal_toggle = lambda disabled, mon=None: None
+        self.ctl.snapshot = lambda: {"placeholder": True, "monitors": [self._laptop()]}
+        reloads = []
+        self.ctl.reload_hypr = lambda: reloads.append("reload")
+        self.ctl.run = lambda cmd: None
+        self.assertEqual(self.ctl.recover_internal(quiet=True), 0)
+        self.assertEqual(reloads, [])
+        with open(self.ctl.MONITORS_LUA, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn(self.odyssey, text)
+        self.assertNotIn("FALLBACK", text)
 
 
 class PrivateFilePublish(unittest.TestCase):

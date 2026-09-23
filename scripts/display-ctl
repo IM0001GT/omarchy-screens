@@ -571,8 +571,12 @@ def merge_drm_connected(monitors):
 def snapshot():
     raw = hypr_json(["monitors", "all"]) or []
     monitors = []
+    saw_placeholder = False
     for mon in raw:
         name = mon.get("name") or ""
+        if is_dummy_name(name):
+            saw_placeholder = True
+            continue
         modes = [p for p in (parse_mode(x) for x in mon.get("availableModes") or []) if p]
         scale = mon.get("scale") or 1
         transform = int(mon.get("transform") or 0)
@@ -747,6 +751,7 @@ def snapshot():
         "oledGuard": os.path.isdir(OLED_GUARD_PLUGIN_DIR),
         "pendingRevert": store.get("pendingRevert") or None,
         "scaleKeys": public_scale_keys(store.get("scaleKeys")),
+        "placeholder": saw_placeholder,
     }
 
 
@@ -909,7 +914,12 @@ def merge_desk_layout(prev, entries):
 
 def remember_layout(monitors):
     store = load_store()
-    entries = [profile_entry_from_monitor(m) for m in monitors if monitor_identity(m)]
+    monitors = drop_dummy_monitors(monitors)
+    entries = [
+        profile_entry_from_monitor(m)
+        for m in monitors
+        if monitor_identity(m) and not is_dummy_identity(monitor_identity(m))
+    ]
     store["lastLayout"] = entries
     if not any((e.get("mirror") or "") for e in entries):
         store["deskLayout"] = merge_desk_layout(store.get("deskLayout"), entries)
@@ -1234,8 +1244,41 @@ def format_float(n):
     return text if text else "0"
 
 
+def is_dummy_name(name):
+    """Hyprland placeholders. FALLBACK is the headless output it inserts while a panel is in DPMS."""
+    text = str(name or "").strip().upper()
+    if text in ("FALLBACK", "UNKNOWN", "HEADLESS"):
+        return True
+    return text.startswith("HEADLESS-")
+
+
+def is_dummy_identity(ident):
+    text = str(ident or "").strip()
+    if text.lower().startswith("desc:"):
+        text = text[5:].strip()
+    return is_dummy_name(text)
+
+
+def is_dummy_monitor(mon):
+    if not isinstance(mon, dict):
+        return is_dummy_name(mon)
+    if is_dummy_name(mon.get("name")):
+        return True
+    if is_dummy_identity(mon.get("identity")):
+        return True
+    if is_dummy_name(mon.get("description")):
+        return True
+    return False
+
+
+def drop_dummy_monitors(monitors):
+    return [m for m in (monitors or []) if isinstance(m, dict) and not is_dummy_monitor(m)]
+
+
 def clean_connector(name):
     text = str(name or "").strip()
+    if is_dummy_name(text):
+        return ""
     return text if CONNECTOR_RE.match(text) else ""
 
 
@@ -1407,7 +1450,8 @@ def recover_internal(quiet=False):
     toggle_was_on = internal_toggle_active()
     set_internal_toggle(False)
     data = snapshot()
-    monitors = data.get("monitors") or []
+    placeholder = bool(data.get("placeholder"))
+    monitors = drop_dummy_monitors(data.get("monitors") or [])
     monitors, changed = enable_drm_internals(monitors, drm_names)
     if not monitors:
         return 0
@@ -1417,11 +1461,36 @@ def recover_internal(quiet=False):
     # The clamshell watcher and Screens both retry this. Reloading Hyprland
     # eight times after the laptop is already up leaves USB-C DP dongles in
     # USB-only alt-mode, so the external never comes back on replug.
-    if already_on and not changed and not toggle_was_on:
+    if already_on and not changed and not toggle_was_on and not placeholder:
         if not quiet:
             print(json.dumps(data, separators=(",", ":")))
         return 0
-    write_monitors_lua(monitors)
+    if placeholder:
+        prepared = prepare_monitors_for_write(monitors, restore_geometry=True)
+        if len(prepared) > len(monitors):
+            existing = read_text(MONITORS_LUA)
+            needs_write = lua_has_dummy_output(existing)
+            if not needs_write:
+                have = set(parse_lua_monitors(existing))
+                for mon in prepared:
+                    ref = output_ref(mon, set())
+                    if ref and ref not in have:
+                        needs_write = True
+                        break
+            if needs_write:
+                write_monitors_lua(prepared)
+                reload_hypr()
+                live_ids = {
+                    monitor_identity(m) for m in monitors if monitor_identity(m)
+                }
+                remembered = [
+                    m for m in prepared if monitor_identity(m) in live_ids
+                ]
+                remember_layout(remembered or monitors)
+            if not quiet:
+                print(json.dumps(snapshot(), separators=(",", ":")))
+            return 0
+    write_monitors_lua(monitors, placeholder=placeholder)
     reload_hypr()
     for name in drm_names:
         if not is_internal_panel(name):
@@ -1441,6 +1510,8 @@ def recover_internal(quiet=False):
 
 
 def output_ref(mon, used_desc):
+    if is_dummy_monitor(mon):
+        return ""
     name = clean_connector(mon.get("name"))
     # omarchy-hyprland-monitor-clamshell only reads the internal panel's rule
     # when it is keyed by connector name. Behind a desc: key it finds no scale,
@@ -1451,11 +1522,17 @@ def output_ref(mon, used_desc):
     if desc and desc not in used_desc:
         used_desc.add(desc)
         return "desc:%s" % desc
-    return name or "Unknown"
+    if is_dummy_name(name):
+        return ""
+    return name
 
 
 def monitor_lua(mon, used_desc):
+    if is_dummy_monitor(mon):
+        return ""
     name = output_ref(mon, used_desc)
+    if not name or is_dummy_name(name):
+        return ""
     # Named `disabled = true` for the laptop panel beats the catch-all fallback
     # after the last external is unplugged. Omarchy's overlay toggle is what
     # actually turns the internal panel off; recover can then lift it.
@@ -1630,6 +1707,51 @@ def plan_for_write(monitors):
             "first": ids[0] if ids else 0,
             "last": ids[-1] if ids else 0,
         })
+    # A dock that is unplugged is not in the live list. Keep its pins in the
+    # saved plan so the next plug restores them. The bar treats those ids as
+    # unassigned until that monitor is back.
+    live_names = set()
+    live_idents = set()
+    for mon in monitors or []:
+        name = clean_connector(mon.get("name"))
+        if name:
+            live_names.add(name)
+        if mon.get("identity"):
+            live_idents.add(mon.get("identity"))
+        else:
+            ident_live = monitor_identity(mon)
+            if ident_live:
+                live_idents.add(ident_live)
+    for item in saved or []:
+        if not isinstance(item, dict):
+            continue
+        ident = item.get("identity") or ""
+        name = clean_connector(item.get("name"))
+        if is_dummy_name(name) or is_dummy_identity(ident):
+            continue
+        if (ident and ident in live_idents) or (name and name in live_names):
+            continue
+        ids = []
+        for ws in item.get("ids") or []:
+            try:
+                ws = int(ws)
+            except (TypeError, ValueError):
+                continue
+            if ws < 1 or ws > workspace_total() or ws in used:
+                continue
+            used.add(ws)
+            ids.append(ws)
+        ids.sort()
+        if not ids:
+            continue
+        plan.append({
+            "name": name,
+            "identity": ident,
+            "label": item.get("label") or name,
+            "ids": ids,
+            "first": ids[0],
+            "last": ids[-1],
+        })
     return plan
 
 
@@ -1768,8 +1890,12 @@ def managed_block_lines(monitors):
     used = set()
     inner = [MANAGED_BEGIN]
     for mon in monitors:
+        if is_dummy_monitor(mon):
+            continue
         if mon.get("name") or mon.get("description"):
-            inner.append(monitor_lua(mon, used))
+            line = monitor_lua(mon, used)
+            if line:
+                inner.append(line)
     inner.append('hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })')
     max_vrr = 0
     for mon in monitors:
@@ -2724,7 +2850,87 @@ def gdk_from_monitors(monitors, fallback="2"):
     return str(max(1, int(round(max(scales)))))
 
 
-def write_monitors_lua(monitors, gdk=None):
+def saved_desk_entries():
+    store = load_store()
+    raw = store.get("deskLayout") or store.get("lastLayout") or []
+    entries = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        ident = str(entry.get("id") or "")
+        if not ident or is_dummy_identity(ident):
+            continue
+        entries.append(entry)
+    return entries
+
+
+def monitor_from_layout_entry(entry):
+    ident = str(entry.get("id") or "")
+    if not ident or is_dummy_identity(ident):
+        return None
+    mon = {
+        "identity": ident,
+        "name": "",
+        "description": "",
+        "enabled": bool(entry.get("enabled", True)),
+        "mode": entry.get("mode") or "preferred",
+        "x": int(entry.get("x") or 0),
+        "y": int(entry.get("y") or 0),
+        "scale": entry.get("scale") if entry.get("scale") not in (None, "") else 1,
+        "transform": int(entry.get("transform") or 0),
+        "vrr": int(entry.get("vrr") or 0),
+        "hdr": bool(entry.get("hdr")),
+        "hdrMode": entry.get("hdrMode"),
+        "bitdepth": entry.get("bitdepth"),
+        "cm": entry.get("cm"),
+        "sdrMinLuminance": entry.get("sdrMinLuminance"),
+        "sdrMaxLuminance": entry.get("sdrMaxLuminance"),
+        "sdrBrightness": entry.get("sdrBrightness"),
+        "sdrSaturation": entry.get("sdrSaturation"),
+        "sdrEotf": entry.get("sdrEotf"),
+        "supportsWideColor": entry.get("supportsWideColor"),
+        "minLuminance": entry.get("minLuminance"),
+        "maxLuminance": entry.get("maxLuminance"),
+        "maxAvgLuminance": entry.get("maxAvgLuminance"),
+        "textPx": entry.get("textPx"),
+        "mirror": entry.get("mirror") or "",
+    }
+    if ident.lower().startswith("desc:"):
+        mon["description"] = ident[5:]
+    else:
+        mon["name"] = ident
+    return mon
+
+
+def prepare_monitors_for_write(monitors, restore_geometry=False):
+    """Drop placeholders. If a real screen vanished, keep its saved rule."""
+    live = [dict(m) for m in drop_dummy_monitors(monitors)]
+    saved = saved_desk_entries()
+    live_ids = {monitor_identity(m) for m in live if monitor_identity(m)}
+    saved_ids = {entry["id"] for entry in saved}
+    missing = [entry for entry in saved if entry["id"] not in live_ids]
+    if not live_ids or not missing or not (live_ids < saved_ids):
+        return live
+    if restore_geometry:
+        restore_desk_geometry(live)
+    for entry in missing:
+        mon = monitor_from_layout_entry(entry)
+        if mon:
+            live.append(mon)
+    return live
+
+
+def lua_has_dummy_output(text):
+    for output in parse_lua_monitors(text):
+        if is_dummy_name(output) or is_dummy_identity(output):
+            return True
+    return False
+
+
+def write_monitors_lua(monitors, gdk=None, placeholder=False):
+    monitors = prepare_monitors_for_write(monitors, restore_geometry=placeholder)
+    if not monitors:
+        return ""
     existing = ""
     if os.path.isfile(MONITORS_LUA):
         with open(MONITORS_LUA, encoding="utf-8") as fh:
@@ -3533,7 +3739,7 @@ def claim_monitors(force=False):
         monitors = data.get("monitors") or []
         if monitors:
             recover_last_internal(monitors)
-            write_monitors_lua(monitors)
+            write_monitors_lua(monitors, placeholder=bool(data.get("placeholder")))
             sync_internal_overlay(monitors)
             wrote = True
         store = load_store()
@@ -3991,7 +4197,7 @@ def pin_workspaces(plan):
     for item in plan or []:
         dest = clean_connector(item.get("name"))
         ids = item.get("ids") or []
-        if not dest or not ids:
+        if not dest or is_dummy_name(dest) or dest not in by_name or not ids:
             continue
         for ws in ids:
             try:
@@ -4007,7 +4213,7 @@ def pin_workspaces(plan):
     for item in plan or []:
         dest = clean_connector(item.get("name"))
         ids = item.get("ids") or []
-        if not dest or dest == focused:
+        if not dest or is_dummy_name(dest) or dest not in by_name or dest == focused:
             continue
         live_mon = by_name.get(dest) or {}
         active = (live_mon.get("activeWorkspace") or {}).get("id")
