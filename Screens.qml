@@ -572,6 +572,13 @@ Panel {
         root.careService.panelScreen = ""
       }
     }
+    if (!pending && root.pendingConfirm && !root.isPanelOwner()) {
+      // One widget runs per bar, each with its own countdown. When the owner
+      // resolves Keep/Revert, stop this one too, or it reverts on its own
+      // later and rolls the text size back to a stale live value.
+      revertTick.stop()
+      root.pendingConfirm = false
+    }
     if (pending) {
       root.pendingConfirm = true
       var left = Math.ceil(Number(data.deadline || 0) - Date.now() / 1000)
