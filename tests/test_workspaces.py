@@ -747,6 +747,35 @@ class ColorAndScale(unittest.TestCase):
     def test_scale_keeps_one_thirty_three(self):
         self.assertEqual(self.ctl.clean_scale(1.33), 1.33)
 
+    def test_scale_and_float_reject_non_finite_and_lua(self):
+        self.assertEqual(self.ctl.clean_scale(float("nan")), 1)
+        self.assertEqual(self.ctl.clean_scale(float("inf")), 1)
+        self.assertEqual(self.ctl.clean_scale('1); os.execute("id")'), 1)
+        self.assertEqual(self.ctl.format_float(float("nan")), "0")
+        self.assertEqual(self.ctl.format_float('1); os.execute("id")'), "0")
+        self.assertEqual(self.ctl.clean_float(float("nan"), 0.0, 1.0, 0.005), 0.005)
+
+    def test_monitor_lua_scale_is_a_number(self):
+        line = self.ctl.monitor_lua(
+            {
+                "name": "DP-1",
+                "description": "Test",
+                "mode": "1920x1080@60",
+                "x": '10); os.execute("id")',
+                "y": 0,
+                "scale": '1.5); os.execute("id")',
+                "transform": '4); os.execute("id")',
+                "vrr": '2); os.execute("id")',
+                "enabled": True,
+            },
+            set(),
+        )
+        self.assertNotIn("os.execute", line)
+        self.assertIn("scale = 1", line)
+        self.assertIn('position = "0x0"', line)
+        self.assertNotIn("transform =", line)
+        self.assertIn("vrr = 0", line)
+
     def test_lua_writes_ten_for_sixteen(self):
         line = self.ctl.monitor_lua(
             {
@@ -1516,6 +1545,51 @@ class PlaceholderOutputs(unittest.TestCase):
             text = fh.read()
         self.assertIn(self.odyssey, text)
         self.assertNotIn("FALLBACK", text)
+
+    def test_restored_desk_fields_cannot_inject_lua(self):
+        self.ctl.save_store({
+            "deskLayout": [
+                {
+                    "id": self.odyssey,
+                    "enabled": True,
+                    "mode": '3840x2160@239.91"); os.execute("id")',
+                    "x": 0,
+                    "y": 0,
+                    "scale": '1.5); os.execute("id")',
+                    "vrr": '1); os.execute("id")',
+                    "hdr": True,
+                    "hdrMode": 2,
+                    "sdrMinLuminance": '0.2); os.execute("id")',
+                    "sdrBrightness": '1); os.execute("id")',
+                    "cm": 'hdr"); os.execute("id")',
+                    "mirror": 'DP-1"); os.execute("id")',
+                },
+                {
+                    "id": self.laptop_id,
+                    "enabled": True,
+                    "mode": "2560x1600@120.00",
+                    "x": '3840); os.execute("id")',
+                    "y": 0,
+                    "scale": 1.6,
+                    "transform": '2); os.execute("id")',
+                    "vrr": 0,
+                    "mirror": "",
+                },
+            ]
+        })
+        text = self.ctl.write_monitors_lua([self._laptop(x=1920)], placeholder=True)
+        self.assertNotIn("os.execute", text)
+        self.assertNotIn("FALLBACK", text)
+        self.assertIn(self.odyssey, text)
+        self.assertNotIn("3840x2160@239.91", text)
+        self.assertRegex(text, r"scale = 1[,}]")
+        self.assertIn("scale = 1.6", text)
+        self.assertIn('position = "0x0"', text)
+        self.assertNotIn('position = "1920x0"', text)
+        mon = self.ctl.monitor_from_layout_entry(self.ctl.load_store()["deskLayout"][0])
+        self.assertEqual(mon["scale"], 1)
+        self.assertNotIsInstance(mon["scale"], str)
+        self.assertEqual(mon["mode"], "preferred")
 
 
 class PrivateFilePublish(unittest.TestCase):

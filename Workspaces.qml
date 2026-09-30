@@ -13,6 +13,9 @@ BarWidget {
 
   property var assignment: ({ enabled: false, monitors: [], layouts: {}, labels: {}, total: 10 })
   readonly property int workspaceMax: Model.clampWorkspaceTotal(root.assignment && root.assignment.total)
+  // Holds the last id list by mutating .ids. Replacing this object would
+  // notify, and the bar repeater would rebuild.
+  property var workspaceIdCache: ({ ids: [] })
   property int menuWorkspace: 0
   property var menuAnchor: null
   property bool menuOpen: false
@@ -110,6 +113,26 @@ BarWidget {
     }
     ids.sort(function(a, b) { return a - b })
     return ids
+  }
+
+  function sameWorkspaceIds(prev, next) {
+    if (!prev || prev.length !== next.length) return false
+    for (var i = 0; i < next.length; i++) {
+      if (prev[i] !== next[i]) return false
+    }
+    return true
+  }
+
+  // Repeater treats every new JS array as a new model and rebuilds every
+  // delegate. That rebuild is what was segfaulting quickshell. Reuse the
+  // previous array until the id list actually changes.
+  function workspaceIdsForBar() {
+    var next = root.workspaceIds()
+    var cache = root.workspaceIdCache
+    var prev = cache && cache.ids
+    if (root.sameWorkspaceIds(prev, next)) return prev
+    if (cache) cache.ids = next
+    return next
   }
 
   function layoutOf(id) {
@@ -223,7 +246,7 @@ BarWidget {
     rowSpacing: root.vertical ? Style.space(2) : 0
 
     Repeater {
-      model: root.workspaceIds()
+      model: root.workspaceIdsForBar()
 
       // WidgetButton centers the mono advance, not ink. Nerd icons overflow
       // that box, so offset each glyph by FontMetrics boundingRect vs advance.

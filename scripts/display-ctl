@@ -960,15 +960,7 @@ def restore_desk_geometry(monitors):
         rule = hints.get(mon.get("identity") or "")
         if not rule:
             continue
-        for key in (
-            "mode", "x", "y", "scale", "transform", "vrr", "hdr",
-            "hdrMode", "bitdepth", "cm", "sdrMinLuminance", "sdrMaxLuminance",
-            "sdrBrightness", "sdrSaturation", "sdrEotf", "supportsWideColor",
-            "textPx", "minLuminance",
-            "maxLuminance", "maxAvgLuminance",
-        ):
-            if key in rule:
-                mon[key] = rule[key]
+        apply_saved_layout_fields(mon, rule)
         mon["mirror"] = ""
         mon["logicalW"], mon["logicalH"] = logical_size(
             mon.get("width"),
@@ -1158,7 +1150,8 @@ def clean_scale(value):
         n = float(value)
     except (TypeError, ValueError):
         return 1
-    if n <= 0 or n > 8:
+    # NaN fails every comparison, so it must not fall through as a Lua token.
+    if not (n > 0 and n <= 8):
         return 1
     return round(n, 3)
 
@@ -1168,7 +1161,7 @@ def clean_float(value, lo, hi, default):
         n = float(value)
     except (TypeError, ValueError):
         return default
-    if n < lo or n > hi:
+    if not (n >= lo and n <= hi):
         return default
     return n
 
@@ -1240,8 +1233,17 @@ def auto_hdr_render(monitors):
 
 
 def format_float(n):
-    text = ("%.4f" % float(n)).rstrip("0").rstrip(".")
-    return text if text else "0"
+    """A Lua numeric literal. Never the raw input."""
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        n = 0.0
+    if n != n or n == float("inf") or n == float("-inf"):
+        n = 0.0
+    text = ("%.4f" % n).rstrip("0").rstrip(".")
+    if text in ("", "-", "-0"):
+        return "0"
+    return text
 
 
 def is_dummy_name(name):
@@ -1541,14 +1543,19 @@ def monitor_lua(mon, used_desc):
     fields = [
         "output = %s" % lua_str(name),
         "mode = %s" % lua_str(mon.get("mode") or "preferred"),
-        "position = %s" % lua_str("%dx%d" % (int(mon.get("x") or 0), int(mon.get("y") or 0))),
-        "scale = %s" % (mon.get("scale") if mon.get("scale") not in (None, "") else 1),
+        "position = %s" % lua_str("%dx%d" % (
+            clean_int(mon.get("x"), -32768, 32767, 0),
+            clean_int(mon.get("y"), -32768, 32767, 0),
+        )),
+        "scale = %s" % format_float(clean_scale(
+            mon.get("scale") if mon.get("scale") not in (None, "") else 1
+        )),
     ]
-    transform = int(mon.get("transform") or 0)
+    transform = clean_int(mon.get("transform"), 0, 7, 0)
     if transform:
         fields.append("transform = %d" % transform)
     # Persist the integer even when 0. hyprctl often reports VRR as a boolean.
-    fields.append("vrr = %d" % int(mon.get("vrr") or 0))
+    fields.append("vrr = %d" % clean_int(mon.get("vrr"), 0, 3, 0))
     mode = hdr_mode(mon)
     cm = clean_cm(mon.get("cm"))
     if mode == 0 and cm in ("hdr", "hdredid"):
@@ -1900,7 +1907,7 @@ def managed_block_lines(monitors):
     max_vrr = 0
     for mon in monitors:
         if mon.get("enabled", True):
-            max_vrr = max(max_vrr, int(mon.get("vrr") or 0))
+            max_vrr = max(max_vrr, clean_int(mon.get("vrr"), 0, 3, 0))
     inner.append(
         "hl.config({ misc = { vrr = %d }, render = { cm_auto_hdr = %d } })"
         % (max_vrr, auto_hdr_render(monitors))
@@ -2850,36 +2857,75 @@ def gdk_from_monitors(monitors, fallback="2"):
     return str(max(1, int(round(max(scales)))))
 
 
+_LAYOUT_RESTORE_KEYS = (
+    "mode", "x", "y", "scale", "transform", "vrr", "hdr",
+    "hdrMode", "bitdepth", "cm", "sdrMinLuminance", "sdrMaxLuminance",
+    "sdrBrightness", "sdrSaturation", "sdrEotf", "supportsWideColor",
+    "textPx", "minLuminance", "maxLuminance", "maxAvgLuminance",
+)
+
+
+def clean_layout_identity(ident):
+    text = str(ident or "").strip()
+    if not text or is_dummy_identity(text):
+        return ""
+    if len(text) > 240:
+        return ""
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+        return ""
+    return text
+
+
+def apply_saved_layout_fields(mon, rule):
+    """Copy one saved rule onto a live monitor, after the Lua field checks."""
+    if not isinstance(mon, dict) or not isinstance(rule, dict):
+        return mon
+    overlay = dict(mon)
+    for key in _LAYOUT_RESTORE_KEYS:
+        if key in rule:
+            overlay[key] = rule[key]
+    cleaned = sanitize_monitor(overlay)
+    for key in _LAYOUT_RESTORE_KEYS:
+        if key in rule:
+            mon[key] = cleaned[key]
+    return mon
+
+
 def saved_desk_entries():
+    """Saved desk rows with the fields monitors.lua is allowed to emit."""
     store = load_store()
     raw = store.get("deskLayout") or store.get("lastLayout") or []
+    if not isinstance(raw, list):
+        return []
     entries = []
     for entry in raw:
-        if not isinstance(entry, dict):
+        mon = monitor_from_layout_entry(entry)
+        if not mon or not mon.get("identity"):
             continue
-        ident = str(entry.get("id") or "")
-        if not ident or is_dummy_identity(ident):
-            continue
-        entries.append(entry)
+        safe = profile_entry_from_monitor(mon)
+        safe["id"] = mon["identity"]
+        entries.append(safe)
     return entries
 
 
 def monitor_from_layout_entry(entry):
-    ident = str(entry.get("id") or "")
-    if not ident or is_dummy_identity(ident):
+    if not isinstance(entry, dict):
+        return None
+    ident = clean_layout_identity(entry.get("id"))
+    if not ident:
         return None
     mon = {
         "identity": ident,
         "name": "",
         "description": "",
-        "enabled": bool(entry.get("enabled", True)),
+        "enabled": entry.get("enabled", True),
         "mode": entry.get("mode") or "preferred",
-        "x": int(entry.get("x") or 0),
-        "y": int(entry.get("y") or 0),
+        "x": entry.get("x"),
+        "y": entry.get("y"),
         "scale": entry.get("scale") if entry.get("scale") not in (None, "") else 1,
-        "transform": int(entry.get("transform") or 0),
-        "vrr": int(entry.get("vrr") or 0),
-        "hdr": bool(entry.get("hdr")),
+        "transform": entry.get("transform"),
+        "vrr": entry.get("vrr"),
+        "hdr": entry.get("hdr"),
         "hdrMode": entry.get("hdrMode"),
         "bitdepth": entry.get("bitdepth"),
         "cm": entry.get("cm"),
@@ -2899,7 +2945,9 @@ def monitor_from_layout_entry(entry):
         mon["description"] = ident[5:]
     else:
         mon["name"] = ident
-    return mon
+    cleaned = sanitize_monitor(mon)
+    cleaned["identity"] = ident
+    return cleaned
 
 
 def prepare_monitors_for_write(monitors, restore_geometry=False):
@@ -3929,7 +3977,7 @@ def apply(payload, gdk=None, preview=False):
     max_vrr = 0
     for mon in monitors:
         if mon.get("enabled", True):
-            max_vrr = max(max_vrr, int(mon.get("vrr") or 0))
+            max_vrr = max(max_vrr, clean_int(mon.get("vrr"), 0, 3, 0))
     run([
         "hyprctl",
         "eval",

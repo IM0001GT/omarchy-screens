@@ -127,6 +127,8 @@ omarchy restart shell
 
 **1.15.0** keeps a saved display mode across sleep. Hyprland’s `FALLBACK` placeholder is not written into `monitors.lua`, and an external rule you already applied stays there while that panel is in DPMS. Spread workspaces still shows numbers on the laptop after you undock: pins for a monitor that is gone are treated as unassigned until it returns, and a sync while undocked does not throw those pins away. Monitor names drawn from Hyprland / EDID are plain text. Thanks to [lixenstrand](https://github.com/lixenstrand) and [BVisagie](https://github.com/BVisagie) for the reports.
 
+**1.15.1** checks a saved display’s scale, position, mode, and HDR fields before they are written into `monitors.lua`, so a tampered state file cannot add Lua. The workspace bar keeps its buttons while the list of workspaces is unchanged, instead of rebuilding them on every Hyprland update. Thanks to [AlienWithGlasses](https://github.com/AlienWithGlasses) for the crash report.
+
 ## Uninstall
 
 Restore the pre-Screens files first, then remove the plugin:
