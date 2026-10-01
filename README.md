@@ -129,7 +129,7 @@ omarchy restart shell
 
 **1.15.1** checks a saved display’s scale, position, mode, and HDR fields before they are written into `monitors.lua`, so a tampered state file cannot add Lua. The workspace bar keeps its buttons while the list of workspaces is unchanged, instead of rebuilding them on every Hyprland update. Thanks to [AlienWithGlasses](https://github.com/AlienWithGlasses) for the crash report.
 
-**1.15.2** keeps the text size you confirmed with Keep when more than one bar is running. Revert puts HDR, color, and the other display controls back with the picture. Thanks to [Dielerorn](https://github.com/Dielerorn) for the report.
+**1.15.2** keeps the text size you confirmed with Keep when more than one bar is running. If you Apply and do not Keep, HDR, color, text size, and the other fields go back to their previous setting instead of staying on the preview after the picture reverts. Thanks to [Dielerorn](https://github.com/Dielerorn) for the report.
 
 ## Uninstall
 
