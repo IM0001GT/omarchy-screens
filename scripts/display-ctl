@@ -830,6 +830,9 @@ def load_store():
             store["workspacesBarId"] = str(data.get("workspacesBarId") or "")
             store["barCare"] = normalize_bar_care(data.get("barCare"))
             store["scaleKeys"] = data.get("scaleKeys") if isinstance(data.get("scaleKeys"), dict) else {}
+            pending = data.get("pendingRevert")
+            if isinstance(pending, dict):
+                store["pendingRevert"] = pending
     except (OSError, json.JSONDecodeError):
         pass
     if "barCare" not in store:
@@ -912,7 +915,38 @@ def merge_desk_layout(prev, entries):
     return current
 
 
-def remember_layout(monitors):
+def commit_pending_text_px(store, text_px):
+    """Write previewed per-display text sizes after Keep.
+
+    Previews from before the full layout was held back only stashed textPx.
+    """
+    if not isinstance(store, dict) or not isinstance(text_px, dict):
+        return
+    for key in ("lastLayout", "deskLayout"):
+        entries = store.get(key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            ident = entry.get("id")
+            if ident in text_px:
+                entry["textPx"] = clean_int(text_px[ident], 0, 20, 0)
+    save_store(store)
+
+
+def commit_layout_entries(store, entries):
+    """Write a kept layout into lastLayout and deskLayout."""
+    if not isinstance(store, dict) or not isinstance(entries, list):
+        return
+    clean = [e for e in entries if isinstance(e, dict) and e.get("id")]
+    store["lastLayout"] = clean
+    if not any((e.get("mirror") or "") for e in clean):
+        store["deskLayout"] = merge_desk_layout(store.get("deskLayout"), clean)
+    save_store(store)
+
+
+def remember_layout(monitors, commit=True):
     store = load_store()
     monitors = drop_dummy_monitors(monitors)
     entries = [
@@ -920,10 +954,13 @@ def remember_layout(monitors):
         for m in monitors
         if monitor_identity(m) and not is_dummy_identity(monitor_identity(m))
     ]
-    store["lastLayout"] = entries
-    if not any((e.get("mirror") or "") for e in entries):
-        store["deskLayout"] = merge_desk_layout(store.get("deskLayout"), entries)
-    save_store(store)
+    if not commit:
+        # monitors.lua already has the preview. HDR, color, text size, and the
+        # other remembered controls stay out of the store until Keep, so
+        # Revert can put the panel back with the picture.
+        return entries
+    commit_layout_entries(store, entries)
+    return None
 
 
 def refresh_active_profile(monitors):
@@ -3877,6 +3914,15 @@ def clear_pending_revert():
 
 
 def confirm_layout():
+    store = load_store()
+    pending = store.get("pendingRevert") or {}
+    layout = pending.get("layout") if isinstance(pending, dict) else None
+    if isinstance(layout, list) and layout:
+        commit_layout_entries(store, layout)
+    else:
+        text_px = pending.get("textPx") if isinstance(pending, dict) else None
+        if isinstance(text_px, dict) and text_px:
+            commit_pending_text_px(store, text_px)
     clear_pending_revert()
     print(json.dumps(snapshot(), separators=(",", ":")))
     return 0
@@ -3994,7 +4040,7 @@ def apply(payload, gdk=None, preview=False):
         print(errors, file=sys.stderr)
         return 1
     prev_store = load_store()
-    remember_layout(monitors)
+    staged_layout = remember_layout(monitors, commit=not preview)
     if not preview:
         refresh_active_profile(monitors)
     wake_new_outputs(monitors, prev_store)
@@ -4005,7 +4051,10 @@ def apply(payload, gdk=None, preview=False):
     if preview:
         deadline = time.time() + 20
         store = load_store()
-        store["pendingRevert"] = {"deadline": deadline}
+        pending = {"deadline": deadline}
+        if isinstance(staged_layout, list) and staged_layout:
+            pending["layout"] = staged_layout
+        store["pendingRevert"] = pending
         save_store(store)
         write_panel_state(True, True, deadline)
     print(json.dumps(snapshot(), separators=(",", ":")))

@@ -1309,6 +1309,58 @@ class DeskLayoutMerge(unittest.TestCase):
         self.assertIn("desc:LG Electronics LG HDR 4K 0x0006B200", ids)
         self.assertEqual(len(store.get("lastLayout") or []), 1)
 
+    def test_preview_holds_layout_until_keep(self):
+        ident = "desc:Sharp Corporation 0x14CB"
+        saved = {
+            "id": ident,
+            "textPx": 12,
+            "hdrMode": 0,
+            "cm": "srgb",
+            "bitdepth": 8,
+            "supportsWideColor": 0,
+            "sdrEotf": "default",
+            "mode": "1920x1200@60",
+            "scale": 1,
+            "mirror": "",
+        }
+        self.ctl.save_store({"lastLayout": [dict(saved)], "deskLayout": [dict(saved)]})
+        staged = self.ctl.remember_layout([{
+            "name": "eDP-1",
+            "description": "Sharp Corporation 0x14CB",
+            "enabled": True,
+            "mode": "1920x1200@60",
+            "x": 0,
+            "y": 0,
+            "scale": 1,
+            "textPx": 16,
+            "hdrMode": 2,
+            "hdr": True,
+            "cm": "hdredid",
+            "bitdepth": 10,
+            "supportsWideColor": 1,
+            "sdrEotf": "gamma22",
+        }], commit=False)
+        store = self.ctl.load_store()
+        self.assertEqual(store["lastLayout"][0]["textPx"], 12)
+        self.assertEqual(store["lastLayout"][0]["hdrMode"], 0)
+        self.assertEqual(store["lastLayout"][0]["cm"], "srgb")
+        self.assertEqual(store["lastLayout"][0]["bitdepth"], 8)
+        self.assertEqual(store["deskLayout"][0]["sdrEotf"], "default")
+        self.assertEqual(staged[0]["id"], ident)
+        self.assertEqual(staged[0]["textPx"], 16)
+        self.assertEqual(staged[0]["hdrMode"], 2)
+        self.assertEqual(staged[0]["cm"], "hdredid")
+        self.assertEqual(staged[0]["bitdepth"], 10)
+        self.assertEqual(staged[0]["supportsWideColor"], 1)
+        self.assertEqual(staged[0]["sdrEotf"], "gamma22")
+        self.ctl.commit_layout_entries(store, staged)
+        store = self.ctl.load_store()
+        self.assertEqual(store["lastLayout"][0]["textPx"], 16)
+        self.assertEqual(store["lastLayout"][0]["hdrMode"], 2)
+        self.assertEqual(store["lastLayout"][0]["cm"], "hdredid")
+        self.assertEqual(store["deskLayout"][0]["bitdepth"], 10)
+        self.assertEqual(store["deskLayout"][0]["sdrEotf"], "gamma22")
+
 
 class PlaceholderOutputs(unittest.TestCase):
     def setUp(self):
@@ -1667,6 +1719,66 @@ class PanelStateFile(unittest.TestCase):
         self.assertFalse(loaded["wanted"])
         self.assertFalse(loaded["pendingConfirm"])
         self.assertEqual(loaded["screen"], "")
+
+    def test_confirm_writes_stashed_layout(self):
+        ident = "desc:Sharp Corporation 0x14CB"
+        self.ctl.save_store({
+            "lastLayout": [{"id": ident, "hdrMode": 0, "cm": "srgb", "textPx": 12, "mirror": ""}],
+            "deskLayout": [{"id": ident, "hdrMode": 0, "cm": "srgb", "textPx": 12, "mirror": ""}],
+            "pendingRevert": {
+                "deadline": 1,
+                "layout": [{
+                    "id": ident,
+                    "hdrMode": 2,
+                    "cm": "hdredid",
+                    "textPx": 16,
+                    "bitdepth": 10,
+                    "mirror": "",
+                }],
+            },
+        })
+        self.ctl.write_panel_state(True, True, 1, "eDP-1")
+        self.ctl.snapshot = lambda: {"ok": True}
+        self.assertEqual(self.ctl.confirm_layout(), 0)
+        store = self.ctl.load_store()
+        self.assertIsNone(store.get("pendingRevert"))
+        self.assertEqual(store["lastLayout"][0]["hdrMode"], 2)
+        self.assertEqual(store["lastLayout"][0]["cm"], "hdredid")
+        self.assertEqual(store["lastLayout"][0]["textPx"], 16)
+        self.assertEqual(store["deskLayout"][0]["bitdepth"], 10)
+        panel = self.ctl.read_panel_state()
+        self.assertTrue(panel["wanted"])
+        self.assertFalse(panel["pendingConfirm"])
+
+    def test_revert_drops_preview_without_keeping_it(self):
+        ident = "desc:Sharp Corporation 0x14CB"
+        self.ctl.save_store({
+            "lastLayout": [{"id": ident, "hdrMode": 0, "cm": "srgb", "textPx": 12}],
+            "pendingRevert": {
+                "deadline": 1,
+                "layout": [{"id": ident, "hdrMode": 2, "cm": "hdredid", "textPx": 16}],
+            },
+        })
+        self.ctl.clear_pending_revert()
+        store = self.ctl.load_store()
+        self.assertIsNone(store.get("pendingRevert"))
+        self.assertEqual(store["lastLayout"][0]["hdrMode"], 0)
+        self.assertEqual(store["lastLayout"][0]["cm"], "srgb")
+        self.assertEqual(store["lastLayout"][0]["textPx"], 12)
+
+    def test_confirm_still_writes_older_text_size_stash(self):
+        ident = "desc:Sharp Corporation 0x14CB"
+        self.ctl.save_store({
+            "lastLayout": [{"id": ident, "textPx": 12}],
+            "deskLayout": [{"id": ident, "textPx": 12}],
+            "pendingRevert": {"deadline": 1, "textPx": {ident: 16}},
+        })
+        self.ctl.snapshot = lambda: {"ok": True}
+        self.assertEqual(self.ctl.confirm_layout(), 0)
+        store = self.ctl.load_store()
+        self.assertEqual(store["lastLayout"][0]["textPx"], 16)
+        self.assertEqual(store["deskLayout"][0]["textPx"], 16)
+        self.assertIsNone(store.get("pendingRevert"))
 
 
 if __name__ == "__main__":

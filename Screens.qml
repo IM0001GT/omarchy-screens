@@ -389,7 +389,13 @@ Panel {
       keepName = root.selected.name || ""
     }
     var list = (data && data.monitors) ? Model.clone(data.monitors) : []
-    root.monitors = list
+    // The countdown is the preview. A refresh still carries the layout from
+    // before Apply, and copying it in would put HDR, color, and text size back
+    // before Keep or Revert.
+    if (root.pendingConfirm && root.monitors && root.monitors.length)
+      list = root.monitors
+    else
+      root.monitors = list
     root.profiles = (data && data.profiles) ? data.profiles : []
     root.activeProfile = (data && data.active) ? String(data.active) : ""
     root.autoSwitch = !data || data.autoSwitch !== false
@@ -572,13 +578,24 @@ Panel {
         root.careService.panelScreen = ""
       }
     }
+    // One widget runs per bar, and each used to keep its own 20s countdown.
+    // Keep only stopped the bar you clicked, so another bar later restored
+    // the text size from its stale pre-Apply value.
+    if (!pending && root.pendingConfirm && !root.isPanelOwner()) {
+      revertTick.stop()
+      root.pendingConfirm = false
+    }
     if (pending) {
       root.pendingConfirm = true
       var left = Math.ceil(Number(data.deadline || 0) - Date.now() / 1000)
       if (left < 1) left = 1
       if (left > 30) left = 30
       root.revertLeft = left
-      if (!revertTick.running) revertTick.restart()
+      if (root.isPanelOwner()) {
+        if (!revertTick.running) revertTick.restart()
+      } else {
+        revertTick.stop()
+      }
     }
     if (wanted) root.startResumeRetry()
   }
@@ -632,6 +649,8 @@ Panel {
     revertTick.stop()
     root.pendingConfirm = false
     root.layoutDirty = false
+    if (root.liveMonitors && root.liveMonitors.length)
+      root.monitors = Model.clone(root.liveMonitors)
     root.restoreLiveTextSize()
     if (revertProc.running) return
     revertProc.command = [root.ctl, "revert"]
@@ -1168,7 +1187,7 @@ Panel {
   Component.onCompleted: {
     refresh()
     root.applyCareVisuals()
-    if (root.careService && root.careService.pendingConfirm) {
+    if (root.careService && root.careService.pendingConfirm && root.isPanelOwner()) {
       root.pendingConfirm = true
       root.revertLeft = root.careService.revertLeft || 20
       revertTick.restart()
@@ -1323,7 +1342,13 @@ Panel {
 
   Process {
     id: keepProc
-    stdout: StdioCollector { waitForEnd: true }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try { root.adopt(JSON.parse(text)) }
+        catch (e) {}
+      }
+    }
   }
 
   Process {
@@ -2040,14 +2065,14 @@ Panel {
                 height: Math.max(profileDrop.implicitHeight, profileSolo.implicitHeight)
                 clip: true
 
-                Dropdown {
+                BoundDropdown {
                   id: profileDrop
                   visible: root.profiles.length > 1
                   width: parent.width
                   showLabel: false
                   foreground: root.bar.foreground
                   fontFamily: root.bar.fontFamily
-                  value: root.activeProfile
+                  modelValue: root.activeProfile
                   options: Model.profileOptions(root.profiles)
                   onChanged: function(v) { if (v) root.applyProfile(v) }
                 }
@@ -2698,24 +2723,24 @@ Panel {
               width: parent.width
               spacing: Style.space(8)
 
-              Dropdown {
+              BoundDropdown {
                 width: (parent.width - parent.spacing) / 2
                 label: "RESOLUTION"
                 showLabel: true
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
-                value: root.selected ? Model.resolutionOf(root.selected.mode) : ""
+                modelValue: root.selected ? Model.resolutionOf(root.selected.mode) : ""
                 options: root.selected ? Model.resolutionOptions(root.selected) : []
                 onChanged: function(v) { root.setResolution(v) }
               }
 
-              Dropdown {
+              BoundDropdown {
                 width: (parent.width - parent.spacing) / 2
                 label: "REFRESH RATE"
                 showLabel: true
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
-                value: root.selected ? root.selected.mode : ""
+                modelValue: root.selected ? root.selected.mode : ""
                 options: root.selected ? Model.refreshOptions(root.selected) : []
                 onChanged: function(v) { root.setMode(v) }
               }
@@ -2725,24 +2750,24 @@ Panel {
               width: parent.width
               spacing: Style.space(8)
 
-              Dropdown {
+              BoundDropdown {
                 width: (parent.width - parent.spacing) / 2
                 label: "ORIENTATION"
                 showLabel: true
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
-                value: root.selected ? String(root.selected.transform) : "0"
+                modelValue: root.selected ? String(root.selected.transform) : "0"
                 options: root.rotateOptions
                 onChanged: function(v) { root.setTransform(v) }
               }
 
-              Dropdown {
+              BoundDropdown {
                 width: (parent.width - parent.spacing) / 2
                 label: "MIRROR"
                 showLabel: true
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
-                value: root.selected ? String(root.selected.mirror || "") : ""
+                modelValue: root.selected ? String(root.selected.mirror || "") : ""
                 options: Model.mirrorOptions(root.monitors, root.selected)
                 onChanged: function(v) { root.setMirror(v) }
               }
@@ -2758,13 +2783,13 @@ Panel {
                 width: parent.width
                 spacing: Style.space(8)
 
-                Dropdown {
+                BoundDropdown {
                   width: parent.width - (Model.hdrModeOf(root.selected) > 0 ? tuneBtn.width + parent.spacing : 0)
                   label: "HDR"
                   showLabel: true
                   foreground: root.bar.foreground
                   fontFamily: root.bar.fontFamily
-                  value: String(Model.hdrModeOf(root.selected))
+                  modelValue: String(Model.hdrModeOf(root.selected))
                   options: root.hdrModeOptions
                   onChanged: function(v) { root.setHdrMode(v) }
                 }
@@ -2862,13 +2887,13 @@ Panel {
                   }
                 }
 
-                Dropdown {
+                BoundDropdown {
                   width: parent.width
                   label: "WIDE COLOR"
                   showLabel: true
                   foreground: root.bar.foreground
                   fontFamily: root.bar.fontFamily
-                  value: root.selected ? String(Number(root.selected.supportsWideColor) || 0) : "0"
+                  modelValue: root.selected ? String(Number(root.selected.supportsWideColor) || 0) : "0"
                   options: root.wideColorOptions
                   onChanged: function(v) { root.setWideColor(v) }
                 }
@@ -2882,24 +2907,24 @@ Panel {
                   font.pixelSize: Style.font.caption
                 }
 
-                Dropdown {
+                BoundDropdown {
                   width: parent.width
                   label: "COLOR PRESET"
                   showLabel: true
                   foreground: root.bar.foreground
                   fontFamily: root.bar.fontFamily
-                  value: root.selected ? String(root.selected.cm || "srgb") : "srgb"
+                  modelValue: root.selected ? String(root.selected.cm || "srgb") : "srgb"
                   options: root.hdrCmOptions
                   onChanged: function(v) { root.setHdrCm(v) }
                 }
 
-                Dropdown {
+                BoundDropdown {
                   width: parent.width
                   label: "SDR TRANSFER"
                   showLabel: true
                   foreground: root.bar.foreground
                   fontFamily: root.bar.fontFamily
-                  value: root.selected ? String(root.selected.sdrEotf || "default") : "default"
+                  modelValue: root.selected ? String(root.selected.sdrEotf || "default") : "default"
                   options: root.sdrEotfOptions
                   onChanged: function(v) { root.setSdrEotf(v) }
                 }
@@ -3117,26 +3142,26 @@ Panel {
               }
             }
 
-            Dropdown {
+            BoundDropdown {
               visible: root.selectedHdrOk && Model.hdrModeOf(root.selected) === 0
               width: parent.width
               label: "COLOR PRESET"
               showLabel: true
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
-              value: root.selected ? String(root.selected.cm || "srgb") : "srgb"
+              modelValue: root.selected ? String(root.selected.cm || "srgb") : "srgb"
               options: root.sdrCmOptions
               onChanged: function(v) { root.setHdrCm(v) }
             }
 
-            Dropdown {
+            BoundDropdown {
               visible: root.selectedVrrOk
               width: parent.width
               label: "VRR"
               showLabel: true
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
-              value: root.selected ? String(root.selected.vrr || 0) : "0"
+              modelValue: root.selected ? String(root.selected.vrr || 0) : "0"
               options: root.vrrOptions
               onChanged: function(v) { root.setVrr(v) }
             }
