@@ -3855,6 +3855,14 @@ def config_errors():
 
 def reload_hypr():
     run(["hyprctl", "reload"])
+    # Hyprland 0.56 parses the monitor rules on `reload` but does not push a
+    # color-management / bitdepth change to an already-configured output, so a
+    # per-monitor `cm = "hdr"` written by the Screens panel looks like it did
+    # nothing. Re-applying the same rules through `eval` forces the output to
+    # reconfigure and engages HDR (verified: cm=srgb -> cm=hdr, XRGB8888 ->
+    # XRGB2101010).
+    if os.path.isfile(MONITORS_LUA):
+        run(["hyprctl", "eval", 'dofile("%s")' % MONITORS_LUA])
     time.sleep(0.15)
 
 
