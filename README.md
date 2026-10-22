@@ -10,7 +10,7 @@ Click the two-tile mark for a panel that stays open. Displays are drawn at their
 
 | Layout | This screen | Night Light | HDR | Profiles | Workspaces | Pixel Care |
 | --- | --- | --- | --- | --- | --- | --- |
-| Drag tiles; edges snap, neighbours reflow. Apply, then 20s Keep / Revert | Brightness (optional all-monitors), text size, resolution, Hz, scale slider, rotation, mirror, Detect | 1500K–6500K Kelvin slider and on/off, same hyprsunset temps as Omarchy | 8-bit or 10-bit PQ on HDR panels, Tune for black / peak | Name a desk; restore on connect | Optional spread; Assign menu for count (default 10, up to 99, 10-per-screen preset) and per-screen pins | Optional 0–100% bar dim, hover lift, no black veil |
+| Drag tiles; edges snap, neighbours reflow. Apply, then 20s Keep / Revert | Brightness (optional all-monitors), text size, resolution, Hz, scale slider, rotation, mirror, Detect | 1500K–6500K Kelvin slider and on/off, same hyprsunset temps as Omarchy | 8-bit or 10-bit PQ on HDR panels, Tune for black / peak | Name a desk; restore on connect | Names and icons on Omarchy's per-screen 1–10. Right-click a number | Optional 0–100% bar dim, hover lift, no black veil |
 
 Works with two screens or a full battlestation. A fallback Hyprland rule still catches anything you hot-plug later. The panel scrolls when it is taller than the screen, so controls stay reachable at large scale (for example 2× on 1080p).
 
@@ -83,16 +83,14 @@ If [HyprMod](https://github.com/BlueManCZ/hyprmod) is managing displays, its `hy
 
 **Workspaces**
 
-- **Spread workspaces** pins workspaces across the screens that are on and not mirroring. Omarchy 4.0.3 no longer lets a plugin register a second bar widget at runtime, so Screens installs a companion plugin (`im0001gt.screens.workspaces`) next to this one. You still only add Screens; spreading swaps that companion onto the bar in place of stock Workspaces.
-- Default is still **10** workspaces. **Assign** (next to the spread toggle) opens the pinning UI so the main panel stays short until you need it
-- **Total** can go to 99. **10 per screen** sets 10 on each enabled display (2 screens → 20). Omarchy’s Super+1–0 keys still jump 1–10; extras are on the bar, Super+Tab, and Super+wheel
-- Two screens at the default 10: primary gets **1–5**, the next screen gets **6–10**. More screens split the total as evenly as possible (leftover slots go to the first screens)
-- **Make primary** chooses which screen receives the first group
-- Each display's bar then shows only that screen's numbers. **Left-click** a number to go there. **Right-click** that same number to **name** it, pick an **icon**, or set **Tile**, **Scroll**, or **Float**. Those choices apply only to that workspace
-- If the active workspace has a name, it appears as a chip next to the numbers
-- **Assign by monitor** — tap a digit to pin that workspace to the screen. A workspace you leave unassigned still shows on the screen where it currently lives, dimmed. If the screen it was pinned to is unplugged, those numbers stay on the display Hyprland moved them to, dimmed, until that screen comes back. Assignment comes from [Titanium-Mothy](https://github.com/Titanium-Mothy)
-- **Split evenly** rebuilds the automatic split (primary first) and replaces a custom plan
-- Turning the toggle off restores Omarchy's stock workspace widget and leaves windows where they are. Shrinking the total moves windows off workspaces you no longer manage so they cannot stick around like a stray 11
+Omarchy gives every screen its own workspaces **1–10**. `Super+1` through `Super+0` follow the screen you are on. Screens does not pin or move those workspaces.
+
+The bar still uses the Screens workspace widget (`im0001gt.screens.workspaces`), installed next to this plugin. You only add Screens.
+
+- Each screen's bar shows that screen's **1–10**. A workspace visiting from an unplugged screen sits after them
+- **Left-click** a number to go there. **Left-click** the workspace you are already on to cycle its layout, the same as `Super+L`
+- **Right-click** a number to **name** it or pick an **icon**. The icon replaces the number. A name shows as a chip beside the row
+- The scroll wheel moves along that screen's workspaces
 
 **Profiles**
 
@@ -131,6 +129,8 @@ omarchy restart shell
 
 **1.15.2** keeps the text size you confirmed with Keep when more than one bar is running. If you Apply and do not Keep, HDR, color, text size, and the other fields go back to their previous setting instead of staying on the preview after the picture reverts. Thanks to [Dielerorn](https://github.com/Dielerorn) for the report.
 
+**1.16.0** leaves workspace placement to Omarchy 4.5. Each screen keeps its own 1–10, and Screens no longer writes workspace rules or layout files. Names and icons stay: right-click a number on the bar. A name is at most 48 characters, and an icon is one preset. An existing pin block in `monitors.lua` is removed once; the monitor lines stay.
+
 ## Uninstall
 
 Restore the pre-Screens files first, then remove the plugin:
@@ -156,9 +156,8 @@ Plugins run as unsandboxed code inside `omarchy-shell`. Screens does not use the
 
 - `~/.config/hypr/monitors.lua` — layout, scale, HDR, VRR
 - `~/.config/hypr/bindings.lua` — Super+/ and Super+Alt+/ scale keys
-- `~/.config/omarchy/shell.json` — only if you turn on workspace spreading, to swap the workspace widget
-- `~/.local/state/omarchy/workspace-layouts/` — Tile / Scroll / Float per workspace (1–99 when you raise the total)
-- `~/.local/state/im0001gt.screens/` — profiles, backups, Pixel Care settings (`bar-care.json`), workspace assignment (`workspaces.json`), and the restore helper
+- `~/.config/omarchy/shell.json` — swaps in the Screens workspace widget so names and icons can show
+- `~/.local/state/im0001gt.screens/` — profiles, backups, Pixel Care settings (`bar-care.json`), workspace names and icons (`workspaces.json`), and the restore helper
 
 ## Requirements
 
@@ -174,8 +173,8 @@ Hyprland HDR is PQ (`cm = hdr` or `hdredid`) at 8-bit or 10-bit. There is no HLG
 manifest.json            Omarchy plugin manifest (must live at repo root)
 Screens.qml              Bar icon + click panel
 ScreenMark.qml           Two-tile bar/hero mark
-Workspaces.qml           Per-display workspace numbers (right-click layout)
-WorkspaceLayoutMenu.qml  Name, icon, Tile / Scroll / Float picker
+Workspaces.qml           Per-screen workspace numbers, names, and icons
+WorkspaceLayoutMenu.qml  Name and icon picker
 Service.qml              Headless helper: Pixel Care, Apply/Revert, companion workspaces plugin
 Model.js                 Snap / normalize / workspace split helpers
 scripts/display-ctl      hyprctl snapshot, monitors.lua writer, hyprmoncfg / HyprMod check, scale keys

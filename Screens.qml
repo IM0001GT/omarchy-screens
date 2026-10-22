@@ -450,7 +450,6 @@ Panel {
     if (prev !== "" && key !== "" && prev !== key
         && !root.opened && !root.dragging && !root.applying) {
       if (root.autoSwitch && root.matchProfile) root.applyProfile(root.matchProfile)
-      else if (root.manageWorkspaces) root.syncWorkspaces()
     }
   }
 
@@ -948,131 +947,6 @@ Panel {
     root.runStore(["profile", "primary", root.selected.identity || ""])
   }
 
-  function setManageWorkspaces(on) {
-    root.manageWorkspaces = !!on
-    if (!on) root.workspacesOpen = false
-    root.runStore(["workspaces", on ? "on" : "off"])
-  }
-
-  function setWorkspacesTotal(value) {
-    var n = Model.clampWorkspaceTotal(value)
-    root.workspacesTotal = n
-    root.runStore(["workspaces", "total", String(n)])
-  }
-
-  function tenPerScreen() {
-    root.setWorkspacesTotal(Model.defaultWorkspaceTotal(root.enabledCount))
-  }
-
-  function syncWorkspaces() {
-    root.runStore(["workspaces", "sync"])
-  }
-
-  function clonePlan(plan) {
-    var out = []
-    for (var i = 0; i < plan.length; i++) {
-      var p = plan[i]
-      out.push({
-        name: p.name,
-        identity: p.identity || "",
-        label: p.label || "",
-        ids: (p.ids || []).slice(),
-        first: p.first,
-        last: p.last
-      })
-    }
-    return out
-  }
-
-  function assignedWorkspaceIds(mon) {
-    if (!mon) return []
-    var p = Model.planForMonitor(root.workspacePlan, mon)
-    return (p && p.ids) ? p.ids : []
-  }
-
-  function workspaceAssignedTo(mon, id) {
-    return root.assignedWorkspaceIds(mon).indexOf(id) !== -1
-  }
-
-  function workspaceHolderId(id) {
-    var list = root.monitors
-    for (var i = 0; i < list.length; i++) {
-      if (!list[i].enabled) continue
-      if (root.workspaceAssignedTo(list[i], id)) return list[i].name
-    }
-    return ""
-  }
-
-  function unassignedWorkspaceIds() {
-    var out = []
-    var total = Model.clampWorkspaceTotal(root.workspacesTotal)
-    for (var id = 1; id <= total; id++) {
-      if (!root.workspaceHolderId(id)) out.push(id)
-    }
-    return out
-  }
-
-  function toggleWorkspaceAssignment(mon, id) {
-    if (!mon || !id) return
-    var next = root.clonePlan(root.workspacePlan)
-    var target = Model.planForMonitor(next, mon)
-    if (!target) {
-      target = { name: mon.name, identity: mon.identity || "", label: mon.label || mon.name, ids: [] }
-      next.push(target)
-    }
-    var idx = target.ids.indexOf(id)
-    if (idx >= 0) {
-      target.ids.splice(idx, 1)
-    } else {
-      target.ids.push(id)
-      for (var i = 0; i < next.length; i++) {
-        if (next[i] === target) continue
-        var k = (next[i].ids || []).indexOf(id)
-        if (k >= 0) next[i].ids.splice(k, 1)
-      }
-      target.ids.sort(function(a, b) { return a - b })
-    }
-    root.pushWorkspacePlan(next)
-  }
-
-  function autoSplitWorkspaces() {
-    root.runStore(["workspaces", "auto"])
-  }
-
-  function pushWorkspacePlan(plan) {
-    var payload = []
-    for (var i = 0; i < root.monitors.length; i++) {
-      var m = root.monitors[i]
-      if (!m.enabled) continue
-      var p = Model.planForMonitor(plan, m)
-      payload.push({ name: m.name, ids: (p && p.ids) ? p.ids : [] })
-    }
-    root.runStore(["workspaces", "assign", JSON.stringify(payload)])
-  }
-
-  function setWorkspaceLayout(id, mode) {
-    root.layoutMenuOpen = false
-    var n = Model.workspaceId(id)
-    if (!n) return
-    root.runStore(["workspace-layout", String(n), mode])
-  }
-
-  function focusWorkspace(id) {
-    var n = Model.workspaceId(id)
-    if (!n) return
-    focusWsProc.command = [
-      "hyprctl", "eval",
-      "hl.dispatch(hl.dsp.focus({ workspace = \"" + n + "\" }))"
-    ]
-    if (!focusWsProc.running) focusWsProc.running = true
-  }
-
-  function openLayoutMenu(id, anchor) {
-    root.layoutMenuWorkspace = id
-    root.layoutMenuAnchor = anchor
-    root.layoutMenuOpen = true
-  }
-
   property var careHover: null
   readonly property var careWindow: (typeof button !== "undefined" && button && button.QsWindow)
     ? button.QsWindow.window
@@ -1408,11 +1282,6 @@ Panel {
         catch (e) { root.refresh() }
       }
     }
-  }
-
-  Process {
-    id: focusWsProc
-    stdout: StdioCollector { waitForEnd: true }
   }
 
   Process {
@@ -2100,7 +1969,7 @@ Panel {
               width: parent.width
               spacing: Style.space(6)
 
-              TextField {
+              BoundedTextField {
                 id: profileNameField
                 width: parent.width - saveConfirmBtn.width - saveCancelBtn.width - parent.spacing * 2
                 text: root.profileName
@@ -2108,6 +1977,7 @@ Panel {
                 font.pixelSize: Style.font.body
                 foreground: root.bar.foreground
                 verticalPadding: Style.space(4)
+                maximumLength: 48
                 onTextChanged: if (activeFocus) root.profileName = text
                 onAccepted: root.saveProfile()
                 Keys.onEscapePressed: root.cancelSave()
@@ -2262,22 +2132,9 @@ Panel {
                     width: parent.width - Style.space(8)
 
                     Text {
-                      visible: !root.manageWorkspaces
                       anchors.horizontalCenter: parent.horizontalCenter
+                      textFormat: Text.PlainText
                       text: String(index + 1)
-                      color: root.bar.foreground
-                      font.family: root.bar.fontFamily
-                      font.pixelSize: Style.font.title
-                      font.bold: true
-                    }
-
-                    Text {
-                      visible: root.manageWorkspaces
-                      anchors.horizontalCenter: parent.horizontalCenter
-                      text: {
-                        var p = Model.planForMonitor(root.workspacePlan, mon)
-                        return p ? Model.workspaceRangeLabel(p.first, p.last) : ""
-                      }
                       color: root.bar.foreground
                       font.family: root.bar.fontFamily
                       font.pixelSize: Style.font.title
@@ -2381,308 +2238,18 @@ Panel {
                 }
               }
 
-              Repeater {
-                model: root.monitors.length
-
-                Item {
-                  id: tileChips
-                  required property int index
-                  readonly property var mon: root.monitors[index]
-                  readonly property var plan: Model.planForMonitor(root.workspacePlan, mon)
-                  visible: root.manageWorkspaces && !!(mon && mon.enabled && plan && plan.ids && plan.ids.length)
-                  x: mon ? canvas.cx(mon.x) : 0
-                  y: mon ? canvas.cy(mon.y) : 0
-                  width: mon ? canvas.cw(mon.logicalW) : 0
-                  height: mon ? canvas.ch(mon.logicalH) : 0
-                  z: 4
-
-                  Row {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.top: parent.top
-                    anchors.topMargin: Style.space(4)
-                    spacing: Style.space(4)
-
-                    Repeater {
-                      model: tileChips.plan && tileChips.plan.ids ? tileChips.plan.ids : []
-
-                      Text {
-                        required property int modelData
-                        text: Model.workspaceDigit(modelData)
-                        color: root.bar.foreground
-                        font.family: root.bar.fontFamily
-                        font.pixelSize: Style.font.caption
-                        font.bold: true
-                        opacity: 0.95
-
-                        MouseArea {
-                          anchors.fill: parent
-                          anchors.margins: -Style.space(4)
-                          acceptedButtons: Qt.LeftButton | Qt.RightButton
-                          preventStealing: true
-                          hoverEnabled: true
-                          cursorShape: Qt.PointingHandCursor
-                          onClicked: function(mouse) {
-                            if (mouse.button === Qt.RightButton)
-                              root.openLayoutMenu(modelData, parent)
-                            else
-                              root.focusWorkspace(modelData)
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
             }
 
           }
 
-          Item {
+          Text {
             width: parent.width
-            implicitHeight: Math.max(spreadToggle.implicitHeight, wsMenuBtn.implicitHeight)
-
-            Toggle {
-              id: spreadToggle
-              anchors.left: parent.left
-              anchors.right: wsMenuBtn.visible ? wsMenuBtn.left : parent.right
-              anchors.rightMargin: wsMenuBtn.visible ? Style.space(6) : 0
-              anchors.verticalCenter: parent.verticalCenter
-              label: "Spread workspaces"
-              description: root.workspaceDescription()
-              checked: root.manageWorkspaces
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              onClicked: root.setManageWorkspaces(!root.manageWorkspaces)
-            }
-
-            Button {
-              id: wsMenuBtn
-              visible: root.manageWorkspaces
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              text: root.workspacesOpen ? "Done" : "Assign"
-              fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
-              bordered: true
-              active: root.workspacesOpen
-              horizontalPadding: Style.space(10)
-              verticalPadding: Style.space(4)
-              tooltipText: root.workspacesOpen
-                ? "Hide pinning and the workspace count"
-                : "Pin workspaces to screens and set how many to manage"
-              onClicked: {
-                root.workspacesOpen = !root.workspacesOpen
-                if (root.workspacesOpen)
-                  Qt.callLater(function() { root.revealItem(workspaceSection) })
-              }
-            }
-          }
-
-          Column {
-            id: workspaceSection
-            width: parent.width
-            spacing: Style.space(8)
-            visible: root.manageWorkspaces && root.workspacesOpen
-
-            Column {
-              width: parent.width
-              spacing: Style.space(2)
-
-              Item {
-                width: parent.width
-                implicitHeight: Math.max(wsTotalLabel.implicitHeight, wsTotalValue.implicitHeight)
-
-                PanelSectionHeader {
-                  id: wsTotalLabel
-                  text: "TOTAL WORKSPACES"
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
-                  anchors.left: parent.left
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-
-                Text {
-                  id: wsTotalValue
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: String(Model.clampWorkspaceTotal(root.workspacesTotal))
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                }
-              }
-
-              WheelSafeSlider {
-                width: parent.width
-                bar: root.bar
-                minimum: 1
-                maximum: 99
-                step: 1
-                integer: true
-                value: root.workspacesTotal
-                onReleased: function(v) { root.setWorkspacesTotal(v) }
-              }
-
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: "Omarchy's Super+1–0 keys cover 1–10. Extra workspaces stay on the bar, Super+Tab, and Super+wheel. 10 per screen is "
-                  + Model.defaultWorkspaceTotal(root.enabledCount) + "."
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            Row {
-              width: parent.width
-              spacing: Style.space(8)
-
-              Button {
-                width: (parent.width - parent.spacing) / 2
-                text: "10 per screen"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                horizontalPadding: Style.space(10)
-                verticalPadding: Style.space(4)
-                tooltipText: "Set the total to 10 workspaces on each enabled display"
-                onClicked: root.tenPerScreen()
-              }
-
-              Button {
-                width: (parent.width - parent.spacing) / 2
-                text: "Split evenly"
-                fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
-                bordered: true
-                horizontalPadding: Style.space(10)
-                verticalPadding: Style.space(4)
-                tooltipText: "Give the primary screen the first block, then split the rest left to right"
-                onClicked: root.autoSplitWorkspaces()
-              }
-            }
-
-            Column {
-              width: parent.width
-              spacing: Style.space(2)
-
-              PanelSectionHeader {
-                text: "ASSIGNED WORKSPACES"
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
-                anchors.horizontalCenter: parent.horizontalCenter
-              }
-
-              Text {
-                width: parent.width
-                horizontalAlignment: Text.AlignHCenter
-                text: "tap a digit to place it"
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-            }
-
-            Repeater {
-              model: root.monitors.length
-
-              Column {
-                id: wsRow
-                required property int index
-                readonly property var mon: root.monitors[index]
-                readonly property bool rowVisible: root.manageWorkspaces && !!(mon && mon.enabled && !mon.mirror)
-                width: parent.width
-                spacing: Style.space(4)
-                visible: rowVisible
-
-                Text {
-                  width: parent.width
-                  horizontalAlignment: Text.AlignHCenter
-                  textFormat: Text.PlainText
-                  text: wsRow.mon ? (wsRow.mon.label || wsRow.mon.name) : ""
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                  elide: Text.ElideRight
-                }
-
-                Flow {
-                  width: parent.width
-                  spacing: Style.space(4)
-
-                  Repeater {
-                    model: Model.clampWorkspaceTotal(root.workspacesTotal)
-
-                    Item {
-                      id: wsCell
-                      required property int index
-                      readonly property int wid: index + 1
-                      readonly property var mon: wsRow.mon
-                      readonly property bool assignedHere: mon ? root.workspaceAssignedTo(mon, wid) : false
-                      readonly property bool dimmed: {
-                        if (!mon || assignedHere) return false
-                        var holder = root.workspaceHolderId(wid)
-                        return holder !== "" && holder !== (mon ? mon.name : "")
-                      }
-                      width: wsCell.wid >= 11 ? Style.space(28) : Style.space(22)
-                      height: Style.space(22)
-
-                      Rectangle {
-                        anchors.fill: parent
-                        radius: Style.space(2)
-                        color: wsCell.assignedHere
-                          ? Util.alpha(Color.accent, 0.9)
-                          : (wsCell.dimmed ? "transparent" : Util.alpha(root.bar.foreground, 0.12))
-                        border.width: wsCell.assignedHere ? 0 : 1
-                        border.color: Util.alpha(root.bar.foreground, wsCell.dimmed ? 0.16 : 0.3)
-                      }
-
-                      Text {
-                        anchors.centerIn: parent
-                        text: Model.workspaceDigit(wsCell.wid)
-                        color: wsCell.assignedHere
-                          ? Color.background
-                          : (wsCell.dimmed ? Qt.darker(root.bar.foreground, 1.45) : root.bar.foreground)
-                        font.family: root.bar.fontFamily
-                        font.pixelSize: Style.font.caption
-                        font.bold: wsCell.assignedHere
-                      }
-
-                      MouseArea {
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: { if (wsCell.mon) root.toggleWorkspaceAssignment(wsCell.mon, wsCell.wid) }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-
-            Text {
-              width: parent.width
-              horizontalAlignment: Text.AlignHCenter
-              wrapMode: Text.Wrap
-              text: {
-                var ids = root.unassignedWorkspaceIds()
-                var total = Model.clampWorkspaceTotal(root.workspacesTotal)
-                if (!ids.length) return "All 1–" + total + " assigned."
-                if (ids.length === total) return "No workspaces assigned — they show on the screen where they currently live."
-                return "Unassigned: " + ids.map(Model.workspaceDigit).join(", ")
-                  + " — still shown on the screen where they live."
-              }
-              color: Qt.darker(root.bar.foreground, 1.4)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-            }
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: "Each screen has its own workspaces 1–10. Right-click a number on the bar to name it or give it an icon."
+            color: Qt.darker(root.bar.foreground, 1.4)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
           }
 
           PanelSeparator { foreground: root.bar.foreground }
@@ -3566,26 +3133,6 @@ Panel {
       }
     }
     }
-
-  QtObject {
-    id: layoutMenuOwner
-    function close() { root.layoutMenuOpen = false }
-  }
-
-  Loader {
-    active: root.layoutMenuOpen && !!root.layoutMenuAnchor
-    sourceComponent: Component {
-      WorkspaceLayoutMenu {
-        anchorItem: root.layoutMenuAnchor
-        bar: root.bar
-        owner: layoutMenuOwner
-        open: true
-        workspaceId: root.layoutMenuWorkspace
-        currentLayout: String(root.workspaceLayouts[String(root.layoutMenuWorkspace)] || "tile")
-        onChosen: function(mode) { root.setWorkspaceLayout(root.layoutMenuWorkspace, mode) }
-      }
-    }
-  }
 
   Loader {
     active: root.identifying && !!root.identifyScreen

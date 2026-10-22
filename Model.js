@@ -600,12 +600,28 @@ function planForMonitor(plan, mon) {
   return null
 }
 
+var WORKSPACE_ID_MAX = 500
+var LABEL_COUNT_MAX = 160
+var LABEL_NAME_MAX = 48
+
 function workspaceId(id) {
   var text = String(id == null ? "" : id).trim()
   if (!/^[0-9]+$/.test(text)) return 0
   var n = parseInt(text, 10)
-  if (n < 1 || n > 99) return 0
+  if (n < 1 || n > WORKSPACE_ID_MAX) return 0
   return n
+}
+
+function workspaceSlot(id) {
+  var n = workspaceId(id)
+  if (!n) return 0
+  return ((n - 1) % 10) + 1
+}
+
+function workspaceBlock(id) {
+  var n = workspaceId(id)
+  if (!n) return -1
+  return Math.floor((n - 1) / 10)
 }
 
 function workspaceDigit(id) {
@@ -625,20 +641,85 @@ var workspacePresetIcons = [
   0xF015, 0xF013, 0xF023, 0xF0C3, 0xF135, 0xF0F4, 0xF005, 0xEA71
 ]
 
+function presetIcon(text) {
+  var chars = Array.from(String(text || ""))
+  if (chars.length !== 1) return ""
+  var cp = chars[0].codePointAt(0)
+  for (var i = 0; i < workspacePresetIcons.length; i++) {
+    if (workspacePresetIcons[i] === cp) return chars[0]
+  }
+  return ""
+}
+
+function cleanWorkspaceName(text) {
+  var name = String(text || "").replace(/[<>]/g, "").replace(/\s+/g, " ").trim()
+  if (name.length > LABEL_NAME_MAX) name = name.slice(0, LABEL_NAME_MAX)
+  return name
+}
+
 function workspaceLabelOf(assignment, id) {
   var labels = (assignment && assignment.labels) ? assignment.labels : {}
-  var entry = labels[String(id)]
+  var entry = labels[String(workspaceId(id))]
   if (!entry || typeof entry !== "object") return { name: "", icon: "" }
   return {
-    name: String(entry.name || ""),
-    icon: String(entry.icon || "")
+    name: cleanWorkspaceName(entry.name),
+    icon: presetIcon(entry.icon)
   }
 }
 
 function workspaceBarText(assignment, id, focused) {
   var icon = workspaceLabelOf(assignment, id).icon
   if (icon) return icon
-  return focused ? "\uDB85\uDCFB" : workspaceDigit(id)
+  var slot = workspaceSlot(id)
+  if (slot === 10) return "0"
+  return slot ? String(slot) : ""
+}
+
+function normalizeWorkspaceLabels(data) {
+  var labels = {}
+  var raw = data && data.labels
+  var empty = { enabled: false, labels: labels, monitors: [], layouts: {}, total: 10 }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return empty
+  var keys = Object.keys(raw)
+  var kept = 0
+  var limit = Math.min(keys.length, LABEL_COUNT_MAX * 2)
+  for (var i = 0; i < limit && kept < LABEL_COUNT_MAX; i++) {
+    var id = workspaceId(keys[i])
+    if (!id) continue
+    var entry = raw[keys[i]]
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue
+    var name = cleanWorkspaceName(entry.name)
+    var icon = presetIcon(entry.icon)
+    if (!name && !icon) continue
+    labels[String(id)] = { name: name, icon: icon }
+    kept++
+  }
+  return { enabled: false, labels: labels, monitors: [], layouts: {}, total: 10 }
+}
+
+function monitorBlocks(text) {
+  var next = {}
+  var raw = String(text || "")
+  if (!raw || raw.length > 65536) return next
+  var lines = raw.split("\n")
+  var kept = 0
+  for (var i = 0; i < lines.length && kept < 64; i++) {
+    var fields = lines[i].split("\t")
+    if (fields.length < 3) continue
+    if (!/^[0-9]+$/.test(fields[0])) continue
+    var block = parseInt(fields[0], 10)
+    if (block < 0 || block > 49) continue
+    if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(fields[1])) continue
+    next[fields[1]] = block
+    kept++
+  }
+  return next
+}
+
+function safeConnector(name) {
+  var text = String(name || "")
+  if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(text)) return ""
+  return text
 }
 
 function workspacePresetCount() {
@@ -820,7 +901,14 @@ if (typeof module !== "undefined") {
     workspacePlan: workspacePlan,
     planForMonitor: planForMonitor,
     workspaceId: workspaceId,
+    workspaceSlot: workspaceSlot,
+    workspaceBlock: workspaceBlock,
     workspaceDigit: workspaceDigit,
+    presetIcon: presetIcon,
+    cleanWorkspaceName: cleanWorkspaceName,
+    normalizeWorkspaceLabels: normalizeWorkspaceLabels,
+    monitorBlocks: monitorBlocks,
+    safeConnector: safeConnector,
     workspacePresetIcons: workspacePresetIcons,
     workspaceLabelOf: workspaceLabelOf,
     workspaceBarText: workspaceBarText,

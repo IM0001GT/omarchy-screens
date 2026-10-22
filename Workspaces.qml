@@ -11,18 +11,53 @@ BarWidget {
   id: root
   moduleName: "im0001gt.screens.workspaces"
 
-  property var assignment: ({ enabled: false, monitors: [], layouts: {}, labels: {}, total: 10 })
-  readonly property int workspaceMax: Model.clampWorkspaceTotal(root.assignment && root.assignment.total)
-  // Holds the last id list by mutating .ids. Replacing this object would
-  // notify, and the bar repeater would rebuild.
+  property var assignment: ({ enabled: false, labels: {} })
+  property var blocks: ({})
   property var workspaceIdCache: ({ ids: [] })
   property int menuWorkspace: 0
   property var menuAnchor: null
   property bool menuOpen: false
+  property string activeMode: "dwindle"
+  property bool modeStale: false
+  property var modeCache: ({})
+  property int modeGeneration: 0
+  property int modeProcWorkspace: -1
+  property int modeProcGeneration: 0
+  property real wheelAccumulator: 0
 
-  readonly property string barScreenName: {
-    var win = root.QsWindow ? root.QsWindow.window : null
-    return (win && win.screen) ? String(win.screen.name) : ""
+  readonly property int slots: 10
+  readonly property var monitor: {
+    var window = root.QsWindow.window
+    var screen = window ? window.screen : null
+    return screen ? Hyprland.monitorFor(screen) : Hyprland.focusedMonitor
+  }
+  readonly property string monitorName: root.monitor ? String(root.monitor.name || "") : ""
+  readonly property int block: {
+    var known = root.blocks[root.monitorName]
+    if (known !== undefined) return known
+    var active = root.activeWorkspaceId
+    return active > 0 ? Model.workspaceBlock(active) : 0
+  }
+  readonly property int activeWorkspaceId: {
+    return root.monitor && root.monitor.activeWorkspace ? root.monitor.activeWorkspace.id : -1
+  }
+  readonly property string activeWorkspaceName: {
+    var name = Model.workspaceLabelOf(root.assignment, root.activeWorkspaceId).name
+    if (name.length > 18) return name.slice(0, 17) + "…"
+    return name
+  }
+
+  function readLabels(text) {
+    var raw = String(text || "")
+    if (!raw || raw.length > 65536) {
+      root.assignment = Model.normalizeWorkspaceLabels(null)
+      return
+    }
+    try {
+      root.assignment = Model.normalizeWorkspaceLabels(JSON.parse(raw))
+    } catch (e) {
+      root.assignment = Model.normalizeWorkspaceLabels(null)
+    }
   }
 
   function workspaceById(id) {
@@ -33,86 +68,25 @@ BarWidget {
     return null
   }
 
-  function workspaceMonitorName(ws) {
-    if (!ws) return ""
-    if (ws.monitor) {
-      if (typeof ws.monitor === "string") return String(ws.monitor)
-      if (ws.monitor.name) return String(ws.monitor.name)
-    }
-    var ipc = ws.lastIpcObject
-    if (ipc && ipc.monitor) return String(ipc.monitor)
-    return ""
-  }
-
-  function connectedMonitorNames() {
-    var mons = (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values : []
-    var names = []
-    var i, name
-    for (i = 0; i < mons.length; i++) {
-      name = mons[i] && mons[i].name ? String(mons[i].name) : ""
-      if (name && names.indexOf(name) === -1) names.push(name)
-    }
-    return names
-  }
-
-  function assignedIds() {
-    var mons = (root.assignment && root.assignment.monitors) ? root.assignment.monitors : []
-    var present = root.connectedMonitorNames()
-    // An empty Hyprland list means the compositor has not reported yet.
-    // Once it has, ids pinned to a monitor that is gone are unassigned
-    // and show on the screen where they currently live.
-    var gate = present.length > 0
-    var all = []
-    var i, j, name
-    for (i = 0; i < mons.length; i++) {
-      name = mons[i] && mons[i].name ? String(mons[i].name) : ""
-      if (gate && present.indexOf(name) === -1) continue
-      var ids = (mons[i] && mons[i].ids) || []
-      for (j = 0; j < ids.length; j++) {
-        if (all.indexOf(ids[j]) === -1) all.push(ids[j])
-      }
-    }
-    return all
-  }
-
-  function isAssignedId(id) {
-    return root.assignedIds().indexOf(id) !== -1
-  }
-
+  // First five of this monitor's block, then any of 6-10 that exist, then
+  // guests parked here from an unplugged screen.
   function workspaceIds() {
-    var mons = (root.assignment && root.assignment.monitors) ? root.assignment.monitors : []
-    var i
-    if (root.assignment && root.assignment.enabled) {
-      var here = []
-      for (i = 0; i < mons.length; i++) {
-        if (mons[i] && mons[i].name === root.barScreenName) {
-          here = (mons[i].ids || []).slice()
-          break
-        }
-      }
-      var assigned = root.assignedIds()
-      var live = Hyprland.workspaces.values
-      for (i = 0; i < live.length; i++) {
-        var wid = live[i].id
-        if (wid > 0 && wid <= root.workspaceMax
-            && assigned.indexOf(wid) === -1
-            && here.indexOf(wid) === -1
-            && root.workspaceMonitorName(live[i]) === root.barScreenName)
-          here.push(wid)
-      }
-      here.sort(function(a, b) { return a - b })
-      return here
-    }
-    var ids = []
+    var base = root.block * root.slots
+    var ids = [base + 1, base + 2, base + 3, base + 4, base + 5]
+    var guests = []
     var values = Hyprland.workspaces.values
-    for (i = 0; i < values.length; i++) {
+    for (var i = 0; i < values.length; i++) {
       var id = values[i].id
-      if (id > 0 && id <= root.workspaceMax && root.workspaceMonitorName(values[i]) === root.barScreenName
-          && ids.indexOf(id) === -1)
-        ids.push(id)
+      if (!Model.workspaceId(id)) continue
+      if (Model.workspaceBlock(id) === root.block) {
+        if (ids.indexOf(id) === -1) ids.push(id)
+      } else if (values[i].monitor && values[i].monitor.name === root.monitorName) {
+        guests.push(id)
+      }
     }
     ids.sort(function(a, b) { return a - b })
-    return ids
+    guests.sort(function(a, b) { return a - b })
+    return ids.concat(guests)
   }
 
   function sameWorkspaceIds(prev, next) {
@@ -123,9 +97,6 @@ BarWidget {
     return true
   }
 
-  // Repeater treats every new JS array as a new model and rebuilds every
-  // delegate. That rebuild is what was segfaulting quickshell. Reuse the
-  // previous array until the id list actually changes.
   function workspaceIdsForBar() {
     var next = root.workspaceIds()
     var cache = root.workspaceIdCache
@@ -135,50 +106,81 @@ BarWidget {
     return next
   }
 
-  function layoutOf(id) {
-    var layouts = (root.assignment && root.assignment.layouts) ? root.assignment.layouts : {}
-    return String(layouts[String(id)] || "tile")
-  }
-
-  readonly property int activeWorkspaceId: {
-    var name = root.barScreenName
-    var mons = (Hyprland.monitors && Hyprland.monitors.values) ? Hyprland.monitors.values : []
-    var i, aw, ipc, id
-    for (i = 0; i < mons.length; i++) {
-      if (String(mons[i].name || "") !== name) continue
-      aw = mons[i].activeWorkspace
-      if (aw && typeof aw.id === "number") return aw.id
-      ipc = mons[i].lastIpcObject
-      if (ipc && ipc.activeWorkspace && ipc.activeWorkspace.id)
-        return Number(ipc.activeWorkspace.id) || 0
-    }
-    var fw = Hyprland.focusedWorkspace
-    if (fw && root.workspaceMonitorName(fw) === name) return fw.id
-    var ids = root.workspaceIds()
-    for (i = 0; i < ids.length; i++) {
-      var ws = root.workspaceById(ids[i])
-      if (ws && Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.id === ids[i])
-        return ids[i]
-    }
-    return ids.length ? ids[0] : 0
-  }
-
-  readonly property string activeWorkspaceName: {
-    var lab = Model.workspaceLabelOf(root.assignment, root.activeWorkspaceId)
-    var name = String(lab.name || "").trim()
-    if (name.length > 18) return name.slice(0, 17) + "…"
-    return name
+  function dispatch(expression) {
+    if (root.bar) root.bar.run("hyprctl dispatch " + Util.shellQuote(expression))
   }
 
   function focusWorkspace(id) {
-    if (!root.bar) return
     var n = Model.workspaceId(id)
     if (!n) return
-    root.bar.run("hyprctl eval " + Util.shellQuote("hl.dispatch(hl.dsp.focus({ workspace = \"" + n + "\" }))"))
+    if (Model.workspaceBlock(n) === root.block) {
+      var mon = Model.safeConnector(root.monitorName)
+      var slot = Model.workspaceSlot(n)
+      if (mon && slot)
+        root.dispatch('o.workspaces.focus(' + slot + ', "' + mon + '")')
+      else
+        root.dispatch('hl.dsp.focus({ workspace = "' + n + '" })')
+    } else {
+      root.dispatch('hl.dsp.focus({ workspace = "' + n + '" })')
+    }
   }
 
-  function openLayoutMenu(id, anchor) {
-    root.menuWorkspace = id
+  function scrollWorkspaces(delta) {
+    var wheel = Util.wheelSteps(root.wheelAccumulator, delta)
+    root.wheelAccumulator = wheel.remainder
+    if (wheel.steps === 0) return
+    var ids = root.workspaceIds()
+    var index = ids.indexOf(root.activeWorkspaceId)
+    if (index === -1) return
+    var target = ids[Util.clamp(index - wheel.steps, 0, ids.length - 1)]
+    if (target !== ids[index]) root.focusWorkspace(target)
+  }
+
+  function modeGlyph(mode) {
+    if (mode === "scrolling") return "󰝥"
+    if (mode === "floating") return "󰔶"
+    return "󱓻"
+  }
+
+  function showActiveMode() {
+    var mode = root.modeCache[root.activeWorkspaceId]
+    if (mode !== undefined) root.activeMode = mode
+    else root.readMode()
+  }
+
+  function readMode() {
+    if (modeProc.running) {
+      root.modeStale = true
+      return
+    }
+    var id = root.activeWorkspaceId
+    if (!Model.workspaceId(id)) return
+    root.modeProcWorkspace = id
+    root.modeProcGeneration = root.modeGeneration
+    modeProc.command = ["omarchy-hyprland-workspace-layout-current", String(id)]
+    modeProc.running = true
+  }
+
+  function refresh() {
+    root.modeCache = ({})
+    root.modeGeneration++
+    root.readMode()
+  }
+
+  function cycleLayout() {
+    if (!root.bar) return
+    var command = "omarchy-hyprland-workspace-layout-toggle"
+    var mon = Model.safeConnector(root.monitorName)
+    if (root.monitor && !root.monitor.focused && mon) {
+      command = "hyprctl dispatch " + Util.shellQuote('hl.dsp.focus({ monitor = "' + mon + '" })') + " >/dev/null && " + command
+    }
+    root.bar.run(command)
+  }
+
+  function openLabelMenu(id, anchor) {
+    var n = Model.workspaceId(id)
+    if (!n) return
+    root.menuWorkspace = n
     root.menuAnchor = anchor
     root.menuOpen = true
   }
@@ -190,51 +192,89 @@ BarWidget {
       Quickshell.env("HOME") + "/.config/omarchy/plugins/im0001gt.screens/scripts/display-ctl",
       "workspace-label",
       String(n),
-      String(name || ""),
-      String(icon || "")
+      Model.cleanWorkspaceName(name),
+      Model.presetIcon(icon)
     ]
     if (!labelProc.running) labelProc.running = true
   }
 
-  function setWorkspaceLayout(mode) {
-    root.menuOpen = false
-    var n = Model.workspaceId(root.menuWorkspace)
-    if (!n) return
-    layoutProc.command = [
-      Quickshell.env("HOME") + "/.config/omarchy/plugins/im0001gt.screens/scripts/display-ctl",
-      "workspace-layout",
-      String(n),
-      mode
-    ]
-    if (!layoutProc.running) layoutProc.running = true
+  function pillText(id, shown) {
+    var icon = Model.workspaceLabelOf(root.assignment, id).icon
+    if (icon) return icon
+    if (shown) return root.modeGlyph(root.activeMode)
+    return Model.workspaceBarText(root.assignment, id, false)
   }
 
   readonly property real trailingGap: root.vertical ? 0 : Style.spaceReal(1.5)
-
   implicitWidth: grid.implicitWidth + trailingGap
   implicitHeight: grid.implicitHeight
+
+  FileView {
+    path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state") + "/omarchy/monitor-workspaces"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.blocks = Model.monitorBlocks(text())
+    onFileChanged: reload()
+    onLoadFailed: root.blocks = ({})
+    Component.onCompleted: reload()
+  }
 
   FileView {
     path: Quickshell.env("HOME") + "/.local/state/im0001gt.screens/workspaces.json"
     watchChanges: true
     printErrors: false
-    onLoaded: {
-      try { root.assignment = JSON.parse(text()) }
-      catch (e) {}
-    }
+    onLoaded: root.readLabels(text())
     onFileChanged: reload()
-    onLoadFailed: root.assignment = ({ enabled: false, monitors: [], layouts: {}, labels: {}, total: 10 })
+    onLoadFailed: root.assignment = Model.normalizeWorkspaceLabels(null)
     Component.onCompleted: reload()
-  }
-
-  Process {
-    id: layoutProc
-    stdout: StdioCollector { waitForEnd: true }
   }
 
   Process {
     id: labelProc
     stdout: StdioCollector { waitForEnd: true }
+  }
+
+  Process {
+    id: modeProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var mode = text.trim()
+        if (!mode || root.modeProcGeneration !== root.modeGeneration) return
+        root.modeCache[root.modeProcWorkspace] = mode
+        if (root.modeProcWorkspace === root.activeWorkspaceId) root.activeMode = mode
+      }
+    }
+    onExited: {
+      if (!root.modeStale) return
+      root.modeStale = false
+      Qt.callLater(root.showActiveMode)
+    }
+  }
+
+  ShellIpc {
+    target: "im0001gt.screens.workspaces"
+    function refresh(): void { root.refresh() }
+  }
+
+  Component.onCompleted: root.refresh()
+  onMonitorChanged: root.showActiveMode()
+
+  Connections {
+    target: root.monitor
+    function onActiveWorkspaceChanged() { root.showActiveMode() }
+  }
+
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      var name = event ? String(event.name) : ""
+      if (name === "configreloaded") root.refresh()
+      var switched = name === "workspacev2" && root.monitor !== null && root.monitor.focused
+      if (switched || name === "moveworkspacev2" || name === "changeworkspaceid") {
+        Hyprland.refreshMonitors()
+        Hyprland.refreshWorkspaces()
+      }
+    }
   }
 
   GridLayout {
@@ -248,129 +288,48 @@ BarWidget {
     Repeater {
       model: root.workspaceIdsForBar()
 
-      // WidgetButton centers the mono advance, not ink. Nerd icons overflow
-      // that box, so offset each glyph by FontMetrics boundingRect vs advance.
-      Item {
+      WidgetButton {
         id: cell
         required property int modelData
+        required property int index
 
-        readonly property var workspace: root.workspaceById(modelData)
-        readonly property bool occupied: workspace !== null && workspace.toplevels.values.length > 0
-        readonly property bool focused: Hyprland.focusedWorkspace !== null && Hyprland.focusedWorkspace.id === modelData
-        readonly property bool unassignedHere: root.assignment && !!root.assignment.enabled && !root.isAssignedId(modelData)
-        readonly property string cellText: Model.workspaceBarText(root.assignment, modelData, focused)
-        readonly property real cellWidth: root.vertical ? root.barSize : Style.space(20)
-        readonly property string tooltipText: {
-          var lab = Model.workspaceLabelOf(root.assignment, modelData)
-          var bits = ["Left: go there", "Right: name, icon, layout"]
-          if (lab.name) bits.unshift(lab.name)
-          if (cell.unassignedHere) {
-            bits.unshift("Unassigned — lives here; left-click to bring up")
-            bits[1] = "Right: name, icon, layout"
-          }
+        readonly property bool occupied: {
+          var workspace = root.workspaceById(modelData)
+          return workspace !== null && workspace.toplevels.values.length > 0
+        }
+        readonly property bool shown: root.activeWorkspaceId === modelData
+        readonly property bool firstGuest: Model.workspaceBlock(modelData) !== root.block
+          && index > 0
+          && Model.workspaceBlock(root.workspaceIds()[index - 1]) === root.block
+        readonly property string tipName: Model.workspaceLabelOf(root.assignment, modelData).name
+
+        Layout.leftMargin: firstGuest && !root.vertical ? Style.space(6) : 0
+        Layout.topMargin: firstGuest && root.vertical ? Style.space(6) : 0
+
+        bar: root.bar
+        text: root.pillText(modelData, shown)
+        opacity: occupied || shown ? 1 : 0.5
+        horizontalMargin: 6
+        verticalPadding: 6
+        fixedWidth: root.vertical ? root.barSize : Style.space(20)
+        fixedHeight: root.barSize
+        tooltipText: {
+          var bits = []
+          if (tipName) bits.push(tipName)
+          bits.push(shown ? "Left: change layout" : "Left: go there")
+          bits.push("Right: name and icon")
           return bits.join(" · ")
         }
-
-        property var bar: root.bar
-        property bool interactive: true
-        property bool pressable: true
-        property bool concealed: false
-        property var registeredBar: null
-        readonly property bool tooltipHovered: visible && interactive && !concealed && mouseArea.containsMouse
-
-        implicitWidth: cellWidth
-        implicitHeight: root.barSize
-        width: implicitWidth
-        height: implicitHeight
-        opacity: cell.unassignedHere ? 0.3 : (occupied || focused ? 1 : 0.5)
-        Layout.fillWidth: false
-        Layout.minimumWidth: implicitWidth
-        Layout.preferredWidth: implicitWidth
-        Layout.maximumWidth: implicitWidth
-        Layout.minimumHeight: implicitHeight
-        Layout.preferredHeight: implicitHeight
-        Layout.alignment: Qt.AlignVCenter
-
-        function triggerPress(button) {
-          if (root.bar) root.bar.hideTooltip(cell)
+        onPressed: function(button) {
           if (button === Qt.RightButton) {
-            root.openLayoutMenu(modelData, cell)
+            root.openLabelMenu(modelData, cell)
             return
           }
           if (root.menuOpen) root.menuOpen = false
-          root.focusWorkspace(modelData)
+          if (shown) root.cycleLayout()
+          else root.focusWorkspace(modelData)
         }
-
-        function hideOwnTooltip() {
-          if (root.bar) root.bar.hideTooltip(cell)
-        }
-
-        function syncClickRegistration() {
-          if (registeredBar && registeredBar.unregisterClickTarget)
-            registeredBar.unregisterClickTarget(cell)
-          registeredBar = cell.bar
-          if (registeredBar && registeredBar.registerClickTarget)
-            registeredBar.registerClickTarget(cell)
-        }
-
-        onBarChanged: syncClickRegistration()
-        onVisibleChanged: if (!visible) hideOwnTooltip()
-        onInteractiveChanged: if (!interactive) hideOwnTooltip()
-        onConcealedChanged: if (concealed) hideOwnTooltip()
-        Component.onCompleted: syncClickRegistration()
-        Component.onDestruction: {
-          hideOwnTooltip()
-          if (registeredBar && registeredBar.unregisterClickTarget)
-            registeredBar.unregisterClickTarget(cell)
-        }
-
-        Behavior on opacity {
-          NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
-        }
-
-        FontMetrics {
-          id: cellMetrics
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.body
-        }
-
-        readonly property real inkOffsetX: {
-          var t = cellText
-          if (!t) return 0
-          var r = cellMetrics.boundingRect(t)
-          var adv = cellMetrics.advanceWidth(t)
-          if (!r || adv <= 0 || r.width <= 0) return 0
-          return (adv / 2) - (r.x + r.width / 2)
-        }
-
-        Text {
-          id: label
-          anchors.centerIn: parent
-          anchors.horizontalCenterOffset: cell.inkOffsetX
-          text: cell.cellText
-          color: root.bar ? root.bar.barForeground : Color.foreground
-          font.family: cellMetrics.font.family
-          font.pixelSize: cellMetrics.font.pixelSize
-          renderType: Text.NativeRendering
-          horizontalAlignment: Text.AlignHCenter
-          verticalAlignment: Text.AlignVCenter
-          Behavior on color {
-            enabled: !root.bar || root.bar.foregroundAnimationEnabled
-            ColorAnimation { duration: 160 }
-          }
-        }
-
-        MouseArea {
-          id: mouseArea
-          anchors.fill: parent
-          acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-          enabled: cell.interactive
-          hoverEnabled: true
-          cursorShape: cell.pressable ? Qt.PointingHandCursor : Qt.ArrowCursor
-          onEntered: if (root.bar) root.bar.showTooltip(cell, cell.tooltipText)
-          onExited: if (root.bar) root.bar.hideTooltip(cell)
-          onClicked: function(mouse) { if (cell.pressable) cell.triggerPress(mouse.button) }
-        }
+        onWheelMoved: function(delta) { root.scrollWorkspaces(delta) }
       }
     }
 
@@ -391,9 +350,9 @@ BarWidget {
       horizontalMargin: 10
       verticalPadding: 6
       fixedHeight: root.barSize
-      tooltipText: "Workspace " + Model.workspaceDigit(root.activeWorkspaceId)
+      tooltipText: "Workspace " + Model.workspaceBarText(root.assignment, root.activeWorkspaceId, false)
       onPressed: function(button) {
-        root.openLayoutMenu(root.activeWorkspaceId, this)
+        root.openLabelMenu(root.activeWorkspaceId, this)
       }
     }
   }
@@ -412,10 +371,8 @@ BarWidget {
         owner: menuOwner
         open: true
         workspaceId: root.menuWorkspace
-        currentLayout: root.layoutOf(root.menuWorkspace)
         workspaceName: Model.workspaceLabelOf(root.assignment, root.menuWorkspace).name
         workspaceIcon: Model.workspaceLabelOf(root.assignment, root.menuWorkspace).icon
-        onChosen: function(mode) { root.setWorkspaceLayout(mode) }
         onLabeled: function(name, icon) { root.setWorkspaceLabel(name, icon) }
       }
     }

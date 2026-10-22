@@ -15,8 +15,8 @@ Commands:
   profile auto 0|1
   profile primary <identity>
   workspaces on|off|sync|auto|assign <json>|plan|total <N>
-  workspace-layout <id> tile|scroll|float
   workspace-label <id> [name] [icon]
+  release-workspaces  drop workspace pins; keep names and monitor lines
   idle off|on|notice
   backup-original    snapshot stock files once, before Screens writes them
   restore-original   put those first snapshots back and reload Hyprland
@@ -65,6 +65,8 @@ STOCK_WS_WIDGET = "omarchy.workspaces"
 WORKSPACES_PLUGIN_FILES = (
     "Workspaces.qml",
     "WorkspaceLayoutMenu.qml",
+    "BoundedTextField.qml",
+    "clipboard_read.py",
     "Model.js",
     "LICENSE",
 )
@@ -1849,47 +1851,16 @@ def normalize_plan(monitors, raw):
 
 
 def assign_workspaces(raw):
-    monitors = snapshot()["monitors"]
-    plan, errors = normalize_plan(monitors, raw)
-    if errors:
-        for err in errors:
-            print("workspaces assign: %s" % err, file=sys.stderr)
-        return 2
-    store = load_store()
-    write_workspaces_json(True, plan, store.get("workspaceLayouts") or {})
-    write_monitors_lua(snapshot_monitors_for_write())
-    reload_hypr()
-    pin_workspaces(plan)
-    print(json.dumps(snapshot(), separators=(",", ":")))
+    print("workspaces assign: Omarchy owns workspace placement", file=sys.stderr)
     return 0
 
 
 def auto_workspaces():
-    store = load_store()
-    monitors = snapshot()["monitors"]
-    plan = workspace_plan(monitors, store.get("primary") or "", workspace_total())
-    write_workspaces_json(True, plan, store.get("workspaceLayouts") or {})
-    write_monitors_lua(snapshot_monitors_for_write())
-    reload_hypr()
-    pin_workspaces(plan)
-    print(json.dumps(snapshot(), separators=(",", ":")))
+    print("workspaces auto: Omarchy owns workspace placement", file=sys.stderr)
     return 0
 
 
 def set_workspaces_total(raw):
-    n = clamp_workspace_total(raw)
-    store = load_store()
-    store["workspacesTotal"] = n
-    save_store(store)
-    if not store.get("manageWorkspaces"):
-        print(json.dumps(snapshot(), separators=(",", ":")))
-        return 0
-    live = snapshot_monitors_for_write()
-    plan = workspace_plan(live, store.get("primary") or "", n)
-    write_workspaces_json(True, plan, store.get("workspaceLayouts") or {})
-    write_monitors_lua(live)
-    reload_hypr()
-    pin_and_save_plan(live)
     print(json.dumps(snapshot(), separators=(",", ":")))
     return 0
 
@@ -1907,27 +1878,8 @@ def report_workspace_plan():
 
 
 def workspace_rule_lines(monitors, primary=""):
-    plan = plan_for_write(monitors)
-    used = set()
-    refs = {}
-    for mon in monitors or []:
-        if mon.get("name") or mon.get("description"):
-            refs[mon.get("name") or ""] = output_ref(mon, used)
-    lines = []
-    for item in plan:
-        output = refs.get(item.get("name") or "")
-        if not output or not item.get("ids"):
-            continue
-        for i, ws in enumerate(item["ids"]):
-            fields = [
-                'workspace = "%d"' % ws,
-                "monitor = %s" % lua_str(output),
-                "persistent = true",
-            ]
-            if i == 0:
-                fields.append("default = true")
-            lines.append("hl.workspace_rule({ %s })" % ", ".join(fields))
-    return lines
+    # Placement belongs to Omarchy's per-monitor blocks. Do not pin IDs.
+    return []
 
 
 def managed_block_lines(monitors):
@@ -3834,7 +3786,8 @@ def claim_monitors(force=False):
         store["claimedMonitors"] = True
         save_store(store)
         recover_internal(quiet=True)
-    if wrote or bindings_changed:
+    released = release_workspace_rules(reload=False)
+    if wrote or bindings_changed or released:
         reload_hypr()
     return {
         "ok": True,
@@ -4216,9 +4169,12 @@ def set_auto(value):
 def read_workspaces_json():
     try:
         with open(WORKSPACES_JSON, encoding="utf-8") as fh:
-            data = json.load(fh)
+            raw = fh.read(65537)
+        if len(raw) > 65536:
+            return {}
+        data = json.loads(raw) if raw.strip() else {}
         return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeError):
         return {}
 
 
@@ -4229,17 +4185,104 @@ def workspace_labels_from(data=None):
     return labels if isinstance(labels, dict) else {}
 
 
+# Same Nerd Font codepoints as Model.js workspacePresetIcons.
+PRESET_ICON_CODES = (
+    0xEAC4, 0xF120, 0xF06A9, 0xF040, 0xF02D, 0xF07B, 0xE69C,
+    0xE8A4, 0xF01EE, 0xE217, 0xF232, 0xE820, 0xEB72, 0xF086, 0xF292,
+    0xEC1B, 0xF03D, 0xF030, 0xF03E, 0xF1FC, 0xF11B, 0xF108, 0xF073,
+    0xF017, 0xF002, 0xF188, 0xF080, 0xF1C0, 0xF233, 0xF0C2, 0xE712,
+    0xF015, 0xF013, 0xF023, 0xF0C3, 0xF135, 0xF0F4, 0xF005, 0xEA71,
+)
+PRESET_ICONS = {chr(cp) for cp in PRESET_ICON_CODES}
+LABEL_ID_MAX = 500
+LABEL_COUNT_MAX = 160
+LABEL_NAME_MAX = 48
+
+
 def parse_workspace_icon(raw):
-    text = str(raw or "").strip()
+    text = str(raw or "")[:16].strip()
     if not text:
         return ""
-    m = re.match(r"^(?:u\+|0x|\\\\u)?([0-9a-f]{4,6})$", text, re.I)
-    if m:
-        cp = int(m.group(1), 16)
-        if 0 < cp <= 0x10FFFF:
-            return chr(cp)
+    if text in PRESET_ICONS:
+        return text
+    match = re.match(r"^(?:u\+|0x|\\u)([0-9a-f]{4,6})$", text, re.I)
+    if not match:
         return ""
-    return text[0]
+    try:
+        glyph = chr(int(match.group(1), 16))
+    except (ValueError, OverflowError):
+        return ""
+    return glyph if glyph in PRESET_ICONS else ""
+
+
+def clean_workspace_name(raw):
+    text = " ".join(str(raw or "")[:256].split())[:LABEL_NAME_MAX]
+    return text.replace("<", "").replace(">", "")
+
+
+def bounded_labels(labels):
+    if not isinstance(labels, dict):
+        return {}
+    kept = {}
+    seen = 0
+    examined = 0
+    for key in labels:
+        if examined >= LABEL_COUNT_MAX * 2 or seen >= LABEL_COUNT_MAX:
+            break
+        examined += 1
+        try:
+            n = int(str(key).strip())
+        except (TypeError, ValueError):
+            continue
+        if n < 1 or n > LABEL_ID_MAX:
+            continue
+        entry = labels.get(key)
+        if not isinstance(entry, dict):
+            continue
+        name = clean_workspace_name(entry.get("name"))
+        icon = parse_workspace_icon(entry.get("icon"))
+        if not name and not icon:
+            continue
+        kept[str(n)] = {"name": name, "icon": icon}
+        seen += 1
+    return kept
+
+
+def strip_workspace_rules_text(text):
+    if MANAGED_BEGIN not in (text or "") or MANAGED_END not in (text or ""):
+        return text or ""
+    pre, rest = text.split(MANAGED_BEGIN, 1)
+    block, post = rest.split(MANAGED_END, 1)
+    lines = block.split("\n")
+    kept = [line for line in lines if "hl.workspace_rule(" not in line]
+    if kept == lines:
+        return text
+    return pre + MANAGED_BEGIN + "\n".join(kept) + MANAGED_END + post
+
+
+def release_workspace_rules(reload=True):
+    """Drop Screens workspace pins. Keep monitor lines and workspace names."""
+    existing = read_text(MONITORS_LUA) if os.path.isfile(MONITORS_LUA) else ""
+    stripped = strip_workspace_rules_text(existing)
+    changed = stripped != existing
+    if changed:
+        write_private_file(MONITORS_LUA, stripped)
+    store = load_store()
+    data = read_workspaces_json()
+    labels = bounded_labels(workspace_labels_from(data))
+    needs_state = (
+        bool(store.get("manageWorkspaces"))
+        or bool(data.get("enabled"))
+        or bool(data.get("monitors"))
+        or labels != (workspace_labels_from(data) if isinstance(workspace_labels_from(data), dict) else {})
+    )
+    if needs_state:
+        store["manageWorkspaces"] = False
+        save_store(store)
+        write_workspaces_json(False, [], {}, labels)
+    if changed and reload:
+        reload_hypr()
+    return changed
 
 
 def write_workspaces_json(enabled, plan, layouts, labels=None):
@@ -4279,112 +4322,17 @@ def clamp_focus_workspace(ws, ids):
 
 
 def pin_workspaces(plan):
-    live = hypr_json(["monitors"]) or []
-    focused = ""
-    focused_ws = ""
-    by_name = {}
-    for mon in live:
-        name = mon.get("name") or ""
-        by_name[name] = mon
-        if mon.get("focused"):
-            focused = name
-            active = mon.get("activeWorkspace") or {}
-            if active.get("id"):
-                focused_ws = str(active.get("id"))
-    for item in plan or []:
-        dest = clean_connector(item.get("name"))
-        ids = item.get("ids") or []
-        if not dest or is_dummy_name(dest) or dest not in by_name or not ids:
-            continue
-        for ws in ids:
-            try:
-                ws = int(ws)
-            except (TypeError, ValueError):
-                continue
-            if ws < 1 or ws > workspace_total():
-                continue
-            hypr_dispatch(
-                "hl.dsp.workspace.move({ workspace = %s, monitor = %s })"
-                % (lua_str(str(ws)), lua_str(dest))
-            )
-    for item in plan or []:
-        dest = clean_connector(item.get("name"))
-        ids = item.get("ids") or []
-        if not dest or is_dummy_name(dest) or dest not in by_name or dest == focused:
-            continue
-        live_mon = by_name.get(dest) or {}
-        active = (live_mon.get("activeWorkspace") or {}).get("id")
-        next_ws = clamp_focus_workspace(active, ids)
-        if not next_ws:
-            continue
-        hypr_dispatch("hl.dsp.focus({ monitor = %s })" % lua_str(dest))
-        hypr_dispatch("hl.dsp.focus({ workspace = %s })" % lua_str(next_ws))
-    if focused:
-        hypr_dispatch("hl.dsp.focus({ monitor = %s })" % lua_str(focused))
-        next_ws = clamp_focus_workspace(focused_ws, plan_ids_for(plan, focused))
-        if next_ws:
-            hypr_dispatch("hl.dsp.focus({ workspace = %s })" % lua_str(next_ws))
+    # Omarchy 4.5 places each monitor's workspaces. Screens does not move them.
+    return
 
 
 def mop_stray_workspaces(plan):
-    """Move windows off workspaces we no longer manage so they cannot stick around."""
-    allowed = set()
-    first = 0
-    by_mon = {}
-    for item in plan or []:
-        ids = []
-        for ws in item.get("ids") or []:
-            try:
-                n = int(ws)
-            except (TypeError, ValueError):
-                continue
-            if n < 1:
-                continue
-            allowed.add(n)
-            ids.append(n)
-            if not first or n < first:
-                first = n
-        dest = clean_connector(item.get("name"))
-        if dest and ids:
-            by_mon[dest] = ids[0]
-    if not first:
-        first = 1
-    clients = hypr_json(["clients"]) or []
-    for client in clients:
-        ws = client.get("workspace") or {}
-        try:
-            cid = int(ws.get("id") or 0)
-        except (TypeError, ValueError):
-            continue
-        if cid < 1 or cid in allowed:
-            continue
-        addr = str(client.get("address") or "")
-        if not addr:
-            continue
-        if not addr.startswith("address:"):
-            addr = "address:%s" % addr
-        mon = clean_connector(client.get("monitor") or "")
-        dest = by_mon.get(mon) or first
-        hypr_dispatch(
-            "hl.dsp.window.move({ workspace = %s, window = %s, follow = false })"
-            % (lua_str(str(dest)), lua_str(addr))
-        )
+    # A workspace outside 1-10 is another monitor's block, not a stray.
+    return
 
 
 def pin_and_save_plan(monitors):
-    store = load_store()
-    plan = plan_for_write(monitors)
-    write_workspaces_json(True, plan, store.get("workspaceLayouts") or {})
-    pin_workspaces(plan)
-    mop_stray_workspaces(plan)
-    for ws_id, mode in (store.get("workspaceLayouts") or {}).items():
-        try:
-            n = int(ws_id)
-        except (TypeError, ValueError):
-            continue
-        if n < 1 or n > workspace_total():
-            continue
-        apply_layout_live(n, mode)
+    return
 
 
 def plugin_present(plugin_id):
@@ -4519,16 +4467,16 @@ def workspaces_plugin_manifest():
         "license": "MIT",
         "homepage": "https://github.com/IM0001GT/omarchy-screens",
         "description": (
-            "Per-display workspaces. Right-click to name, pick an icon, "
-            "or set Tile / Scroll / Float."
+            "Names and icons for each screen's workspaces. "
+            "Omarchy places the workspaces."
         ),
         "kinds": ["bar-widget"],
         "entryPoints": {"barWidget": "Workspaces.qml"},
         "barWidget": {
             "displayName": "Screens workspaces",
             "description": (
-                "Per-display workspaces. Right-click to name, pick an icon, "
-                "or set Tile / Scroll / Float."
+                "Names and icons for each screen's workspaces. "
+                "Right-click a number. Omarchy places the workspaces."
             ),
             "category": "Compositor",
             "allowMultiple": False,
@@ -4783,131 +4731,31 @@ def snapshot_monitors_for_write():
 
 
 def set_manage_workspaces(on):
-    store = load_store()
-    store["manageWorkspaces"] = bool(on)
-    save_store(store)
-    live = snapshot_monitors_for_write()
-    write_monitors_lua(live)
-    reload_hypr()
-    if on:
-        pin_and_save_plan(live)
-        install_workspaces_plugin()
+    release_workspace_rules(reload=True)
+    install_workspaces_plugin()
+    config = load_shell_json() or {}
+    _section, _index, eid, _entry = find_workspaces_slot(config)
+    if eid and eid != OUR_WS_WIDGET:
         swap_bar_workspaces(True)
-    else:
-        write_workspaces_json(False, saved_plan() or [], store.get("workspaceLayouts") or {})
-        swap_bar_workspaces(False)
     print(json.dumps(snapshot(), separators=(",", ":")))
     return 0
 
 
 def sync_workspaces():
-    store = load_store()
-    if not store.get("manageWorkspaces"):
-        print(json.dumps(snapshot(), separators=(",", ":")))
-        return 0
-    live = snapshot_monitors_for_write()
-    write_monitors_lua(live)
-    reload_hypr()
-    pin_and_save_plan(live)
     print(json.dumps(snapshot(), separators=(",", ":")))
     return 0
 
 
 def write_layout_file(ws_id, mode):
-    ensure_stock_backups()
-    path = os.path.join(LAYOUTS_DIR, "%d.lua" % ws_id)
-    hypr_layout = "scrolling" if mode == "scroll" else "dwindle"
-    lines = [
-        'hl.workspace_rule({ workspace = "%d", layout = "%s" })' % (ws_id, hypr_layout),
-    ]
-    if mode == "float":
-        lines.append(
-            'hl.window_rule({ name = %s, match = { workspace = "%d" }, float = true })'
-            % (lua_str("im0001gt.screens-float-%d" % ws_id), ws_id)
-        )
-    write_private_file(path, "\n".join(lines) + "\n")
-
-
-def float_windows_on_workspace(ws_id, floating):
-    clients = hypr_json(["clients"]) or []
-    action = "on" if floating else "off"
-    for client in clients:
-        ws = client.get("workspace") or {}
-        try:
-            cid = int(ws.get("id") or 0)
-        except (TypeError, ValueError):
-            continue
-        if cid != ws_id:
-            continue
-        addr = str(client.get("address") or "")
-        if not addr:
-            continue
-        if not addr.startswith("address:"):
-            addr = "address:%s" % addr
-        hypr_dispatch(
-            "hl.dsp.window.float({ action = %s, window = %s })"
-            % (lua_str(action), lua_str(addr))
-        )
+    return
 
 
 def apply_layout_live(ws_id, mode):
-    hypr_layout = "scrolling" if mode == "scroll" else "dwindle"
-    run(
-        [
-            "hyprctl",
-            "eval",
-            'hl.workspace_rule({ workspace = "%d", layout = "%s" })' % (ws_id, hypr_layout),
-        ]
-    )
-    rule_name = "im0001gt.screens-float-%d" % ws_id
-    if mode == "float":
-        run(
-            [
-                "hyprctl",
-                "eval",
-                "hl.window_rule({ name = %s, match = { workspace = \"%d\" }, float = true })"
-                % (lua_str(rule_name), ws_id),
-            ]
-        )
-        float_windows_on_workspace(ws_id, True)
-        return
-    run(
-        [
-            "hyprctl",
-            "eval",
-            "hl.window_rule({ name = %s, match = { workspace = \"%d\" }, tile = true })"
-            % (lua_str(rule_name), ws_id),
-        ]
-    )
-    float_windows_on_workspace(ws_id, False)
+    return
 
 
 def set_workspace_layout(ws_id, mode):
-    try:
-        ws_id = int(ws_id)
-    except (TypeError, ValueError):
-        print("workspace-layout: workspace must be 1-%d" % workspace_total(), file=sys.stderr)
-        return 2
-    if ws_id < 1 or ws_id > workspace_total():
-        print("workspace-layout: workspace must be 1-%d" % workspace_total(), file=sys.stderr)
-        return 2
-    mode = clean_workspace_layout(mode)
-    if not mode:
-        print("workspace-layout: tile|scroll|float", file=sys.stderr)
-        return 2
-    store = load_store()
-    layouts = dict(store.get("workspaceLayouts") or {})
-    layouts[str(ws_id)] = mode
-    store["workspaceLayouts"] = layouts
-    save_store(store)
-    write_layout_file(ws_id, mode)
-    apply_layout_live(ws_id, mode)
-    if store.get("manageWorkspaces"):
-        live = snapshot()["monitors"]
-        write_workspaces_json(True, plan_for_write(live), layouts)
-    else:
-        write_workspaces_json(False, [], layouts)
-    print(json.dumps(snapshot(), separators=(",", ":")))
+    # Super+L writes o.workspace_mode. Screens must not replace that file.
     return 0
 
 
@@ -4916,24 +4764,22 @@ def set_workspace_label(ws_id, name="", icon=""):
         n = int(str(ws_id).strip())
     except (TypeError, ValueError):
         n = 0
-    if n < 1 or n > workspace_total():
-        print("workspace-label: workspace must be 1-%d" % workspace_total(), file=sys.stderr)
+    if n < 1 or n > LABEL_ID_MAX:
+        print("workspace-label: workspace must be 1-%d" % LABEL_ID_MAX, file=sys.stderr)
         return 2
     data = read_workspaces_json()
-    labels = dict(workspace_labels_from(data))
-    name = " ".join(str(name or "").split())[:48]
+    labels = bounded_labels(workspace_labels_from(data))
+    name = clean_workspace_name(name)
     icon = parse_workspace_icon(icon)
     key = str(n)
     if not name and not icon:
         labels.pop(key, None)
     else:
+        if key not in labels and len(labels) >= LABEL_COUNT_MAX:
+            print("workspace-label: too many names", file=sys.stderr)
+            return 2
         labels[key] = {"name": name, "icon": icon}
-    write_workspaces_json(
-        bool(data.get("enabled")),
-        data.get("monitors") if isinstance(data.get("monitors"), list) else [],
-        data.get("layouts") if isinstance(data.get("layouts"), dict) else {},
-        labels,
-    )
+    write_workspaces_json(False, [], {}, labels)
     return 0
 
 
@@ -4941,11 +4787,6 @@ def set_primary(identity):
     store = load_store()
     store["primary"] = (identity or "").strip()
     save_store(store)
-    if store.get("manageWorkspaces"):
-        live = snapshot()["monitors"]
-        write_monitors_lua(live)
-        reload_hypr()
-        pin_and_save_plan(live)
     print(json.dumps(snapshot(), separators=(",", ":")))
     return 0
 
@@ -5113,6 +4954,15 @@ def main(argv):
             return notice_seen()
         print("idle: off|on|notice", file=sys.stderr)
         return 2
+    if cmd == "release-workspaces":
+        changed = release_workspace_rules(reload=True)
+        install_workspaces_plugin()
+        config = load_shell_json() or {}
+        _section, _index, eid, _entry = find_workspaces_slot(config)
+        if eid and eid != OUR_WS_WIDGET:
+            swap_bar_workspaces(True)
+        print("released" if changed else "unchanged")
+        return 0
     if cmd == "claim":
         print(json.dumps(claim_monitors(), separators=(",", ":")))
         return 0

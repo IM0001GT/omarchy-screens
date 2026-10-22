@@ -99,17 +99,16 @@ class WorkspacePlan(unittest.TestCase):
         self.assertEqual(len(plan), 1)
         self.assertEqual(plan[0]["ids"], list(range(1, 11)))
 
-    def test_workspace_rules_bind_and_mark_default(self):
+    def test_workspace_rules_are_not_written(self):
+        self.ctl.save_store(dict(self.ctl.load_store(), manageWorkspaces=True))
         lines = self.ctl.workspace_rule_lines(
             [self.left, self.right], self.right["identity"]
         )
-        self.assertTrue(any('workspace = "1"' in line and "default = true" in line for line in lines))
-        self.assertTrue(any('workspace = "6"' in line and "default = true" in line for line in lines))
-        self.assertTrue(any('workspace = "10"' in line and "persistent = true" in line for line in lines))
-        self.assertFalse(any('workspace = "2"' in line and "default = true" in line for line in lines))
-        joined = "\n".join(lines)
-        self.assertIn("desc:LG Electronics LG TV SSCR2 0x01010101", joined)
-        self.assertIn("desc:HYC CO. LTD. DUAL-DVI", joined)
+        self.assertEqual(lines, [])
+        block = "\n".join(self.ctl.managed_block_lines([self.left, self.right]))
+        self.assertNotIn("hl.workspace_rule(", block)
+        self.assertIn("LG Electronics LG TV", block)
+        self.assertIn('hl.monitor({ output = ""', block)
 
     def test_custom_plan_is_kept_on_write(self):
         self.ctl.write_workspaces_json(True, [
@@ -184,7 +183,7 @@ class WorkspacePlan(unittest.TestCase):
         self.assertEqual(self.ctl.default_workspace_total(2), 20)
         self.assertEqual(self.ctl.default_workspace_total(3), 30)
 
-    def test_mop_moves_windows_off_unmanaged_workspaces(self):
+    def test_mop_does_not_move_windows(self):
         moved = []
         self.ctl.hypr_json = lambda args: [{
             "workspace": {"id": 11},
@@ -196,9 +195,117 @@ class WorkspacePlan(unittest.TestCase):
             {"name": "DP-4", "ids": [1, 2, 3, 4, 5]},
             {"name": "HDMI-A-1", "ids": [6, 7, 8, 9, 10]},
         ])
-        self.assertEqual(len(moved), 1)
-        self.assertIn('workspace = "1"', moved[0])
-        self.assertIn("0xabc", moved[0])
+        self.ctl.pin_workspaces([
+            {"name": "DP-4", "ids": [1, 2, 3, 4, 5]},
+        ])
+        self.assertEqual(moved, [])
+
+
+class WorkspaceHandoff(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.ctl = load_ctl()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ctl.WORKSPACES_JSON = os.path.join(self.tmp.name, "workspaces.json")
+        self.ctl.PROFILES_PATH = os.path.join(self.tmp.name, "profiles.json")
+        self.ctl.BACKUP_DIR = self.tmp.name
+        self.ctl.MONITORS_LUA = os.path.join(self.tmp.name, "monitors.lua")
+        self.ctl.LAYOUTS_DIR = os.path.join(self.tmp.name, "layouts")
+        os.makedirs(self.ctl.LAYOUTS_DIR, exist_ok=True)
+        self.ctl.reload_hypr = lambda: None
+        self.ctl.save_store({"manageWorkspaces": True, "workspaceLayouts": {"1": "tile"}})
+        self.ctl.write_workspaces_json(True, [
+            {"name": "eDP-1", "ids": [1, 2, 3, 4, 5]},
+        ], {"1": "tile"}, {"3": {"name": "Mail", "icon": "\uf120"}, "nope": {"name": "x"}})
+        with open(self.ctl.MONITORS_LUA, "w", encoding="utf-8") as fh:
+            fh.write(
+                "-- BEGIN im0001gt.screens\n"
+                'hl.monitor({ output = "eDP-1", mode = "1920x1200@60", position = "0x0", scale = 1 })\n'
+                'hl.monitor({ output = "desc:LG Electronics LG HDR 4K 0x0006B200", mode = "2560x1440@60", position = "0x0", scale = 1 })\n'
+                'hl.workspace_rule({ workspace = "6", monitor = "desc:LG Electronics LG HDR 4K 0x0006B200", persistent = true })\n'
+                "-- END im0001gt.screens\n"
+            )
+        with open(os.path.join(self.ctl.LAYOUTS_DIR, "1.lua"), "w", encoding="utf-8") as fh:
+            fh.write('o.workspace_mode({ workspace = "1", mode = "dwindle" })\n')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_release_strips_rules_and_keeps_labels(self):
+        changed = self.ctl.release_workspace_rules(reload=False)
+        self.assertTrue(changed)
+        with open(self.ctl.MONITORS_LUA, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertNotIn("hl.workspace_rule(", text)
+        self.assertIn('output = "eDP-1"', text)
+        self.assertIn("LG HDR 4K", text)
+        self.assertIn("-- END im0001gt.screens", text)
+        store = self.ctl.load_store()
+        self.assertFalse(store.get("manageWorkspaces"))
+        labels = self.ctl.read_workspaces_json()["labels"]
+        self.assertEqual(labels["3"]["name"], "Mail")
+        self.assertNotIn("nope", labels)
+        self.assertFalse(self.ctl.release_workspace_rules(reload=False))
+
+    def test_label_accepts_second_monitor_slot(self):
+        rc = self.ctl.set_workspace_label(13, "Code", "\uf120")
+        self.assertEqual(rc, 0)
+        labels = self.ctl.read_workspaces_json()["labels"]
+        self.assertEqual(labels["13"]["name"], "Code")
+        self.assertEqual(labels["13"]["icon"], "\uf120")
+        self.assertEqual(self.ctl.set_workspace_label(501, "no", ""), 2)
+        self.assertNotIn("501", self.ctl.read_workspaces_json()["labels"])
+
+    def test_fake_length_key_is_not_a_label(self):
+        self.assertEqual(self.ctl.bounded_labels({"length": 10 ** 15}), {})
+
+    def test_oversize_workspace_file_is_ignored(self):
+        with open(self.ctl.WORKSPACES_JSON, "w", encoding="utf-8") as fh:
+            fh.write('{"labels":{"1":{"name":"Mail","icon":""}}}' + (" " * 70000))
+        self.assertEqual(self.ctl.read_workspaces_json(), {})
+
+    def test_layout_command_does_not_rewrite_omarchy_mode_file(self):
+        path = os.path.join(self.ctl.LAYOUTS_DIR, "1.lua")
+        before = open(path, encoding="utf-8").read()
+        rc = self.ctl.set_workspace_layout(1, "scroll")
+        self.assertEqual(rc, 0)
+        self.assertEqual(open(path, encoding="utf-8").read(), before)
+        self.assertFalse(os.path.isfile(os.path.join(self.ctl.LAYOUTS_DIR, "4.lua")))
+
+
+class ClipboardRead(unittest.TestCase):
+    def setUp(self):
+        import importlib.util
+        path = os.path.join(ROOT, "clipboard_read.py")
+        spec = importlib.util.spec_from_file_location("clipboard_read", path)
+        self.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.mod)
+        self.path = path
+
+    def test_limit_is_rejected_before_any_paste_tool(self):
+        import subprocess
+        import sys
+        for bad in ("0", "1025", "nope"):
+            proc = subprocess.run(
+                [sys.executable, self.path, bad, "clipboard"],
+                capture_output=True, text=True, timeout=2,
+            )
+            self.assertNotEqual(proc.returncode, 0, bad)
+            self.assertNotIn("wl-paste", proc.stderr)
+
+    def test_read_stops_at_the_byte_cap(self):
+        import sys
+        huge = self.mod.read_text(
+            [sys.executable, "-c", "print('a' * 200, end='')"], 48)
+        self.assertEqual(huge, "")
+        short = self.mod.read_text(
+            [sys.executable, "-c", "print('Mail', end='')"], 48)
+        self.assertEqual(short, "Mail")
+
+    def test_read_gives_up_at_one_second(self):
+        started = __import__("time").monotonic()
+        self.assertEqual(self.mod.read_text(["sleep", "5"], 48), "")
+        self.assertLess(__import__("time").monotonic() - started, 3)
 
 
 class LayoutNames(unittest.TestCase):
@@ -1072,7 +1179,7 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
         self.plugins = os.path.join(self.tmp.name, "plugins")
         self.src = os.path.join(self.plugins, "im0001gt.screens")
         os.makedirs(self.src, exist_ok=True)
-        for name in ("Workspaces.qml", "WorkspaceLayoutMenu.qml", "Model.js", "LICENSE"):
+        for name in ("Workspaces.qml", "WorkspaceLayoutMenu.qml", "BoundedTextField.qml", "clipboard_read.py", "Model.js", "LICENSE"):
             with open(os.path.join(ROOT, name), encoding="utf-8") as fh:
                 text = fh.read()
             with open(os.path.join(self.src, name), "w", encoding="utf-8") as fh:
@@ -1113,7 +1220,7 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
         self.assertEqual(manifest["barWidget"]["category"], "Compositor")
         self.assertFalse(manifest["barWidget"]["allowMultiple"])
         self.assertEqual(manifest["barWidget"]["defaultSection"], "left")
-        for name in ("Workspaces.qml", "WorkspaceLayoutMenu.qml", "Model.js", "LICENSE"):
+        for name in ("Workspaces.qml", "WorkspaceLayoutMenu.qml", "BoundedTextField.qml", "clipboard_read.py", "Model.js", "LICENSE"):
             self.assertTrue(os.path.isfile(os.path.join(dest, name)), name)
         self.assertTrue(self.ctl.is_generated_workspaces_plugin(dest))
 

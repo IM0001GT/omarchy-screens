@@ -6,23 +6,17 @@ import "Model.js" as Model
 KeyboardPanel {
   id: root
   property int workspaceId: 0
-  property string currentLayout: "tile"
   property string workspaceName: ""
   property string workspaceIcon: ""
   property bool pickerOpen: false
   property string pickedIcon: ""
-  signal chosen(string mode)
   signal labeled(string name, string icon)
 
   focusTarget: nameField
   contentWidth: fittedContentWidth(Style.space(280))
   contentHeight: fittedContentHeight(menuCol.implicitHeight)
 
-  readonly property var modes: [
-    { value: "tile", label: "Tile", hint: "Dwindle tiling" },
-    { value: "scroll", label: "Scroll", hint: "Side-by-side columns" },
-    { value: "float", label: "Float", hint: "Every window floats" }
-  ]
+  readonly property int slot: Model.workspaceSlot(root.workspaceId)
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
 
@@ -69,7 +63,8 @@ KeyboardPanel {
 
     Text {
       width: parent.width
-      text: "Workspace " + (root.workspaceId === 10 ? "0" : String(root.workspaceId))
+      textFormat: Text.PlainText
+      text: "Workspace " + (root.slot === 10 ? "0" : (root.slot ? String(root.slot) : ""))
       color: root.fg
       font.family: root.fontFamily
       font.pixelSize: Style.font.body
@@ -84,7 +79,7 @@ KeyboardPanel {
         id: iconBtn
         width: Style.space(36)
         text: root.pickedIcon !== "" ? root.pickedIcon
-          : (root.workspaceId === 10 ? "0" : String(root.workspaceId))
+          : (root.slot === 10 ? "0" : String(root.slot || ""))
         fontSize: Style.font.icon
         fontFamily: root.fontFamily
         foreground: root.fg
@@ -94,12 +89,17 @@ KeyboardPanel {
         onClicked: root.pickerOpen = !root.pickerOpen
       }
 
-      TextField {
+      BoundedTextField {
         id: nameField
         width: parent.width - iconBtn.width - parent.spacing
         placeholderText: "Name, leave empty to clear"
         foreground: root.fg
         verticalPadding: Style.space(4)
+        maximumLength: 48
+        onTextChanged: {
+          var next = Model.cleanWorkspaceName(text)
+          if (next !== text) text = next
+        }
         onAccepted: root.emitLabel()
         Keys.onEscapePressed: root.close()
       }
@@ -131,6 +131,7 @@ KeyboardPanel {
 
           Text {
             anchors.centerIn: parent
+            textFormat: Text.PlainText
             text: parent.clears ? "\u00d7" : parent.glyph
             color: parent.clears ? Qt.darker(root.fg, 1.5) : root.fg
             font.family: root.fontFamily
@@ -148,32 +149,14 @@ KeyboardPanel {
       }
     }
 
-    PanelSeparator { foreground: root.fg }
-
     Text {
       width: parent.width
       wrapMode: Text.WordWrap
-      text: "Name, icon, and layout apply only to this workspace."
+      textFormat: Text.PlainText
+      text: "Name and icon apply only to this workspace. Super+L changes the layout."
       color: Qt.darker(root.fg, 1.4)
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
-    }
-
-    Repeater {
-      model: root.modes
-
-      Button {
-        required property var modelData
-        width: menuCol.width
-        text: modelData.label
-        fontSize: Style.font.caption
-        fontFamily: root.fontFamily
-        foreground: root.fg
-        bordered: true
-        active: root.currentLayout === modelData.value
-        tooltipText: modelData.hint
-        onClicked: root.chosen(modelData.value)
-      }
     }
   }
 }
