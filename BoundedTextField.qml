@@ -2,14 +2,15 @@ import QtQuick
 import QtQuick.Controls as QQC
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Plain-text line. Paste is read outside the shell, capped, and given one
 // second. The field does not use Qt's native clipboard read.
 QQC.TextArea {
   id: root
-  property color foreground: Color.foreground
-  property color accent: Color.accent
+  property color foreground: Commons.Color.foreground
+  property color accent: Commons.Color.accent
   property int maximumLength: 48
   property real horizontalPadding: Style.spacing.controlPaddingX
   property real verticalPadding: Style.space(4)

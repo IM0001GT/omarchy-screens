@@ -6,6 +6,7 @@ import Quickshell.Wayland
 import Quickshell.Hyprland
 import qs.Ui
 import qs.Commons
+import qs.Commons as Commons
 import "Model.js" as Model
 
 Panel {
@@ -16,6 +17,11 @@ Panel {
 
   readonly property string ctl:
     Quickshell.env("HOME") + "/.config/omarchy/plugins/" + root.moduleName + "/scripts/display-ctl"
+
+  // bar is injected after construction: fall back to the theme until it exists,
+  // instead of dereferencing null during startup (issue #25).
+  readonly property color barForeground: root.bar ? root.bar.foreground : Commons.Color.foreground
+  readonly property string barFontFamily: root.bar ? root.bar.fontFamily : Style.font.family
 
   property var monitors: []
   property int selectedIndex: 0
@@ -1508,8 +1514,8 @@ Panel {
               text: (root.conflict && root.conflict.message)
                 ? root.conflict.message
                 : "Another display tool is still managing your screens."
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
+              color: root.barForeground
+              font.family: root.barFontFamily
               font.pixelSize: Style.font.caption
             }
 
@@ -1523,8 +1529,8 @@ Panel {
                 width: (parent.width - parent.spacing) / (root.conflict && root.conflict.canRemove ? 2 : 1)
                 text: (root.conflict && root.conflict.blocking) ? "Keep unmanaged" : "Keep it"
                 fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
+                fontFamily: root.barFontFamily
+                foreground: root.barForeground
                 bordered: true
                 tooltipText: (root.conflict && root.conflict.blocking)
                   ? "Run hyprmoncfg unmanage so Screens can take over. The hyprmoncfg plugin can stay installed."
@@ -1537,8 +1543,8 @@ Panel {
                 width: (parent.width - parent.spacing) / (root.conflict && (root.conflict.canUnmanage || root.conflict.unmanaged) ? 2 : 1)
                 text: "Remove hyprmoncfg"
                 fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
+                fontFamily: root.barFontFamily
+                foreground: root.barForeground
                 bordered: true
                 tooltipText: "Unmanage, then remove the crmne.hyprmoncfg plugin. The AUR package is left unless you drop it yourself."
                 onClicked: root.runConflictAction("remove")
@@ -1548,8 +1554,8 @@ Panel {
             Button {
               text: root.hyprmoncfgConflict ? "Later" : "Got it"
               fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
+              fontFamily: root.barFontFamily
+              foreground: root.barForeground
               bordered: true
               horizontalPadding: Style.space(10)
               verticalPadding: Style.space(4)
@@ -1565,7 +1571,7 @@ Panel {
               id: heroIcon
               implicitWidth: Style.font.display
               implicitHeight: Style.font.display
-              foreground: root.bar.foreground
+              foreground: root.barForeground
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
             }
@@ -1581,8 +1587,8 @@ Panel {
 
               Text {
                 text: "Screens"
-                color: root.bar.foreground
-                font.family: root.bar.fontFamily
+                color: root.barForeground
+                font.family: root.barFontFamily
                 font.pixelSize: Style.font.title
                 font.bold: true
                 elide: Text.ElideRight
@@ -1596,8 +1602,8 @@ Panel {
                     ? Model.brightnessName(brightnessSlider.liveValue)
                   : root.detectNote ? root.detectNote
                   : Model.heroStatus(root.selected, root.activeProfile)).toUpperCase()
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
+                color: Qt.darker(root.barForeground, 1.4)
+                font.family: root.barFontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
                 font.letterSpacing: Style.font.caption * 0.12
@@ -1615,8 +1621,8 @@ Panel {
               Button {
                 text: "Detect"
                 fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
+                fontFamily: root.barFontFamily
+                foreground: root.barForeground
                 bordered: true
                 horizontalPadding: Style.space(10)
                 verticalPadding: Style.space(4)
@@ -1627,8 +1633,8 @@ Panel {
                 id: identifyBtn
                 text: "Find"
                 fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
+                fontFamily: root.barFontFamily
+                foreground: root.barForeground
                 bordered: true
                 horizontalPadding: Style.space(10)
                 verticalPadding: Style.space(4)
@@ -1645,8 +1651,8 @@ Panel {
             PanelSectionHeader {
               id: pixelCareLabel
               text: "PIXEL CARE"
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
+              foreground: root.barForeground
+              fontFamily: root.barFontFamily
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
             }
@@ -1657,8 +1663,8 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               text: root.barCareOpen ? "Done" : (!!(root.barCare && root.barCare.enabled) ? "On" : "Off")
               fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
+              fontFamily: root.barFontFamily
+              foreground: root.barForeground
               bordered: true
               active: root.barCareOpen || !!(root.barCare && root.barCare.enabled)
               horizontalPadding: Style.space(10)
@@ -1683,8 +1689,8 @@ Panel {
               label: "Dim the bar"
               description: "Lowers the bar widgets so a transparent or themed bar stays that colour. No black veil."
               checked: !!(root.barCare && root.barCare.enabled)
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
+              foreground: root.barForeground
+              fontFamily: root.barFontFamily
               onClicked: root.setBarCare("enabled", !(root.barCare && root.barCare.enabled))
             }
 
@@ -1693,8 +1699,8 @@ Panel {
               width: parent.width
               wrapMode: Text.WordWrap
               text: "OLED Guard is also installed. Its black veil will fight this — disable or remove it if the bar turns black."
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
+              color: root.barForeground
+              font.family: root.barFontFamily
               font.pixelSize: Style.font.caption
             }
 
@@ -1711,8 +1717,8 @@ Panel {
                 PanelSectionHeader {
                   id: dimLabel
                   text: "DIM"
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
+                  foreground: root.barForeground
+                  fontFamily: root.barFontFamily
                   anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
                 }
@@ -1720,8 +1726,8 @@ Panel {
                 Text {
                   id: dimValue
                   text: Model.clampBarDim(root.barCare && root.barCare.dim) + "%"
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
+                  color: root.barForeground
+                  font.family: root.barFontFamily
                   font.pixelSize: Style.font.caption
                   font.bold: true
                   anchors.right: parent.right
@@ -1751,8 +1757,8 @@ Panel {
                 width: parent.width
                 wrapMode: Text.WordWrap
                 text: "How far the bar settles. 100% is fully dim. Hover can lift it back."
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
+                color: Qt.darker(root.barForeground, 1.4)
+                font.family: root.barFontFamily
                 font.pixelSize: Style.font.caption
               }
 
@@ -1761,8 +1767,8 @@ Panel {
                 label: "Lift when I point at the bar"
                 description: "Clears the dim the moment the pointer reaches the bar."
                 checked: !!(root.barCare && root.barCare.hoverLift)
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
+                foreground: root.barForeground
+                fontFamily: root.barFontFamily
                 onClicked: root.setBarCare("hoverLift", !(root.barCare && root.barCare.hoverLift))
               }
             }
@@ -1779,8 +1785,8 @@ Panel {
               text: (root.scaleKeys && root.scaleKeys.message)
                 ? root.scaleKeys.message
                 : "Super+/ is already bound to something that is not Omarchy Display scale. Screens will not steal it unless you say so."
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
+              color: root.barForeground
+              font.family: root.barFontFamily
               font.pixelSize: Style.font.caption
             }
 
@@ -1788,8 +1794,8 @@ Panel {
               width: parent.width
               text: "Use Super+/ for scale"
               fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
+              fontFamily: root.barFontFamily
+              foreground: root.barForeground
               bordered: true
               tooltipText: "Take Super+/ and Super+Alt+/ for Screens scale, like stock Display."
               onClicked: root.setScaleKeys("take")
@@ -1800,8 +1806,8 @@ Panel {
               visible: !!(root.scaleKeys && root.scaleKeys.altUp)
               text: "Use " + ((root.scaleKeys && root.scaleKeys.altUp) ? root.scaleKeys.altUp : "Super+Ctrl+/") + " instead"
               fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
+              fontFamily: root.barFontFamily
+              foreground: root.barForeground
               bordered: true
               tooltipText: "Leave your current Super+/ bind and put scale on a free pair."
               onClicked: root.setScaleKeys("alt")
@@ -1811,8 +1817,8 @@ Panel {
               width: parent.width
               text: "Keep my keybind"
               fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
+              fontFamily: root.barFontFamily
+              foreground: root.barForeground
               bordered: true
               tooltipText: "Do not bind scale keys. Change scale from this panel."
               onClicked: root.setScaleKeys("skip")
@@ -1828,16 +1834,16 @@ Panel {
               width: parent.width
               wrapMode: Text.WordWrap
               text: "Displays are on more than one GPU. Hyprland can leave any panel on a non-primary GPU blank after standby or after you disable it, until you restart Hyprland or the machine. Idle sleep only the primary GPU's panel; other GPUs stay on but black. Detect can find a disabled output — if Turn on lists it but the picture never appears, reboot Hyprland or the system."
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
+              color: root.barForeground
+              font.family: root.barFontFamily
               font.pixelSize: Style.font.caption
             }
 
             Button {
               text: "Got it"
               fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
+              fontFamily: root.barFontFamily
+              foreground: root.barForeground
               bordered: true
               horizontalPadding: Style.space(10)
               verticalPadding: Style.space(4)
@@ -1859,8 +1865,8 @@ Panel {
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
                 text: "PROFILE"
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
+                color: Qt.darker(root.barForeground, 1.4)
+                font.family: root.barFontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
                 font.letterSpacing: Style.font.caption * 0.1
@@ -1876,8 +1882,8 @@ Panel {
                   visible: root.profiles.length > 1 && !!root.activeProfile
                   text: "Apply"
                   fontSize: Style.font.caption
-                  fontFamily: root.bar.fontFamily
-                  foreground: root.bar.foreground
+                  fontFamily: root.barFontFamily
+                  foreground: root.barForeground
                   bordered: true
                   horizontalPadding: Style.space(10)
                   verticalPadding: Style.space(3)
@@ -1888,8 +1894,8 @@ Panel {
                 Button {
                   text: "Save"
                   fontSize: Style.font.caption
-                  fontFamily: root.bar.fontFamily
-                  foreground: root.bar.foreground
+                  fontFamily: root.barFontFamily
+                  foreground: root.barForeground
                   bordered: true
                   horizontalPadding: Style.space(10)
                   verticalPadding: Style.space(3)
@@ -1900,8 +1906,8 @@ Panel {
                   visible: root.profiles.length > 0
                   text: "Delete"
                   fontSize: Style.font.caption
-                  fontFamily: root.bar.fontFamily
-                  foreground: root.bar.foreground
+                  fontFamily: root.barFontFamily
+                  foreground: root.barForeground
                   bordered: true
                   horizontalPadding: Style.space(10)
                   verticalPadding: Style.space(3)
@@ -1911,8 +1917,8 @@ Panel {
                 Button {
                   text: root.autoSwitch ? "On connect" : "Manual"
                   fontSize: Style.font.caption
-                  fontFamily: root.bar.fontFamily
-                  foreground: root.bar.foreground
+                  fontFamily: root.barFontFamily
+                  foreground: root.barForeground
                   bordered: true
                   active: root.autoSwitch
                   horizontalPadding: Style.space(10)
@@ -1939,8 +1945,8 @@ Panel {
                   visible: root.profiles.length > 1
                   width: parent.width
                   showLabel: false
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
+                  foreground: root.barForeground
+                  fontFamily: root.barFontFamily
                   modelValue: root.activeProfile
                   options: Model.profileOptions(root.profiles)
                   onChanged: function(v) { if (v) root.applyProfile(v) }
@@ -1952,8 +1958,8 @@ Panel {
                   width: Math.min(implicitWidth, parent.width)
                   text: root.firstProfileName()
                   fontSize: Style.font.caption
-                  fontFamily: root.bar.fontFamily
-                  foreground: root.bar.foreground
+                  fontFamily: root.barFontFamily
+                  foreground: root.barForeground
                   bordered: true
                   active: true
                   horizontalPadding: Style.space(10)
@@ -1975,7 +1981,7 @@ Panel {
                 text: root.profileName
                 placeholderText: "Name this layout"
                 font.pixelSize: Style.font.body
-                foreground: root.bar.foreground
+                foreground: root.barForeground
                 verticalPadding: Style.space(4)
                 maximumLength: 48
                 onTextChanged: if (activeFocus) root.profileName = text
@@ -1987,8 +1993,8 @@ Panel {
                 id: saveConfirmBtn
                 text: "Save"
                 fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
+                fontFamily: root.barFontFamily
+                foreground: root.barForeground
                 bordered: true
                 horizontalPadding: Style.space(10)
                 verticalPadding: Style.space(3)
@@ -1999,8 +2005,8 @@ Panel {
                 id: saveCancelBtn
                 text: "Cancel"
                 fontSize: Style.font.caption
-                fontFamily: root.bar.fontFamily
-                foreground: root.bar.foreground
+                fontFamily: root.barFontFamily
+                foreground: root.barForeground
                 bordered: true
                 horizontalPadding: Style.space(10)
                 verticalPadding: Style.space(3)
@@ -2009,7 +2015,7 @@ Panel {
             }
           }
 
-          PanelSeparator { foreground: root.bar.foreground }
+          PanelSeparator { foreground: root.barForeground }
 
           Column {
             width: parent.width
@@ -2034,8 +2040,8 @@ Panel {
                   anchors.verticalCenter: parent.verticalCenter
                   textFormat: Text.PlainText
                   text: (mon ? (mon.label || mon.name) : "") + " · Off"
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
+                  color: root.barForeground
+                  font.family: root.barFontFamily
                   font.pixelSize: Style.font.body
                   elide: Text.ElideRight
                 }
@@ -2046,8 +2052,8 @@ Panel {
                   anchors.verticalCenter: parent.verticalCenter
                   text: "Turn on"
                   fontSize: Style.font.caption
-                  fontFamily: root.bar.fontFamily
-                  foreground: root.bar.foreground
+                  fontFamily: root.barFontFamily
+                  foreground: root.barForeground
                   bordered: true
                   horizontalPadding: Style.space(10)
                   verticalPadding: Style.space(3)
@@ -2061,8 +2067,8 @@ Panel {
               width: parent.width
               textFormat: Text.PlainText
               text: root.detectNote
-              color: Qt.darker(root.bar.foreground, 1.4)
-              font.family: root.bar.fontFamily
+              color: Qt.darker(root.barForeground, 1.4)
+              font.family: root.barFontFamily
               font.pixelSize: Style.font.caption
             }
           }
@@ -2096,9 +2102,9 @@ Panel {
               Rectangle {
                 anchors.fill: parent
                 radius: Style.cornerRadius
-                color: Util.alpha(root.bar.foreground, 0.06)
+                color: Util.alpha(root.barForeground, 0.06)
                 border.width: 1
-                border.color: Util.alpha(root.bar.foreground, 0.16)
+                border.color: Util.alpha(root.barForeground, 0.16)
               }
 
               Repeater {
@@ -2116,15 +2122,15 @@ Panel {
                   opacity: mon && mon.enabled ? 1 : 0.7
                   color: {
                     if (root.identifying && index === root.selectedIndex)
-                      return Util.alpha(Color.accent, 0.35)
+                      return Util.alpha(Commons.Color.accent, 0.35)
                     if (index === root.selectedIndex)
-                      return Util.alpha(Color.accent, 0.18)
-                    return Util.alpha(root.bar.foreground, 0.08)
+                      return Util.alpha(Commons.Color.accent, 0.18)
+                    return Util.alpha(root.barForeground, 0.08)
                   }
                   border.width: index === root.selectedIndex ? 2 : 1
                   border.color: index === root.selectedIndex
-                    ? Util.alpha(Color.accent, 0.95)
-                    : Util.alpha(root.bar.foreground, mon && mon.enabled ? 0.28 : 0.45)
+                    ? Util.alpha(Commons.Color.accent, 0.95)
+                    : Util.alpha(root.barForeground, mon && mon.enabled ? 0.28 : 0.45)
 
                   Column {
                     anchors.centerIn: parent
@@ -2135,8 +2141,8 @@ Panel {
                       anchors.horizontalCenter: parent.horizontalCenter
                       textFormat: Text.PlainText
                       text: String(index + 1)
-                      color: root.bar.foreground
-                      font.family: root.bar.fontFamily
+                      color: root.barForeground
+                      font.family: root.barFontFamily
                       font.pixelSize: Style.font.title
                       font.bold: true
                     }
@@ -2146,8 +2152,8 @@ Panel {
                       horizontalAlignment: Text.AlignHCenter
                       textFormat: Text.PlainText
                       text: mon ? mon.label : ""
-                      color: Qt.darker(root.bar.foreground, 1.25)
-                      font.family: root.bar.fontFamily
+                      color: Qt.darker(root.barForeground, 1.25)
+                      font.family: root.barFontFamily
                       font.pixelSize: Style.font.caption
                       elide: Text.ElideRight
                     }
@@ -2156,8 +2162,8 @@ Panel {
                       visible: !!(mon && !mon.enabled)
                       anchors.horizontalCenter: parent.horizontalCenter
                       text: "Off"
-                      color: Qt.darker(root.bar.foreground, 1.35)
-                      font.family: root.bar.fontFamily
+                      color: Qt.darker(root.barForeground, 1.35)
+                      font.family: root.barFontFamily
                       font.pixelSize: Style.font.caption
                       font.bold: true
                     }
@@ -2171,7 +2177,7 @@ Panel {
                 y: canvas.pad
                 width: 1
                 height: canvas.height - canvas.pad * 2
-                color: Color.accent
+                color: Commons.Color.accent
                 opacity: 0.85
               }
 
@@ -2181,7 +2187,7 @@ Panel {
                 y: canvas.cy(Number(root.guideY)) - 0.5
                 width: canvas.width - canvas.pad * 2
                 height: 1
-                color: Color.accent
+                color: Commons.Color.accent
                 opacity: 0.85
               }
 
@@ -2247,12 +2253,12 @@ Panel {
             wrapMode: Text.WordWrap
             textFormat: Text.PlainText
             text: "Each screen has its own workspaces 1–10. Right-click a number on the bar to name it or give it an icon."
-            color: Qt.darker(root.bar.foreground, 1.4)
-            font.family: root.bar.fontFamily
+            color: Qt.darker(root.barForeground, 1.4)
+            font.family: root.barFontFamily
             font.pixelSize: Style.font.caption
           }
 
-          PanelSeparator { foreground: root.bar.foreground }
+          PanelSeparator { foreground: root.barForeground }
 
           Column {
             width: parent.width
@@ -2267,8 +2273,8 @@ Panel {
                 id: selHeader
                 textFormat: Text.PlainText
                 text: root.selected ? root.selected.label : "THIS SCREEN"
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
+                foreground: root.barForeground
+                fontFamily: root.barFontFamily
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
               }
@@ -2277,8 +2283,8 @@ Panel {
                 id: selName
                 textFormat: Text.PlainText
                 text: root.selected ? root.selected.name : ""
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
+                color: Qt.darker(root.barForeground, 1.4)
+                font.family: root.barFontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
                 anchors.right: parent.right
@@ -2294,8 +2300,8 @@ Panel {
                 width: (parent.width - parent.spacing) / 2
                 label: "RESOLUTION"
                 showLabel: true
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
+                foreground: root.barForeground
+                fontFamily: root.barFontFamily
                 modelValue: root.selected ? Model.resolutionOf(root.selected.mode) : ""
                 options: root.selected ? Model.resolutionOptions(root.selected) : []
                 onChanged: function(v) { root.setResolution(v) }
@@ -2305,8 +2311,8 @@ Panel {
                 width: (parent.width - parent.spacing) / 2
                 label: "REFRESH RATE"
                 showLabel: true
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
+                foreground: root.barForeground
+                fontFamily: root.barFontFamily
                 modelValue: root.selected ? root.selected.mode : ""
                 options: root.selected ? Model.refreshOptions(root.selected) : []
                 onChanged: function(v) { root.setMode(v) }
@@ -2321,8 +2327,8 @@ Panel {
                 width: (parent.width - parent.spacing) / 2
                 label: "ORIENTATION"
                 showLabel: true
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
+                foreground: root.barForeground
+                fontFamily: root.barFontFamily
                 modelValue: root.selected ? String(root.selected.transform) : "0"
                 options: root.rotateOptions
                 onChanged: function(v) { root.setTransform(v) }
@@ -2332,8 +2338,8 @@ Panel {
                 width: (parent.width - parent.spacing) / 2
                 label: "MIRROR"
                 showLabel: true
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
+                foreground: root.barForeground
+                fontFamily: root.barFontFamily
                 modelValue: root.selected ? String(root.selected.mirror || "") : ""
                 options: Model.mirrorOptions(root.monitors, root.selected)
                 onChanged: function(v) { root.setMirror(v) }
@@ -2354,8 +2360,8 @@ Panel {
                   width: parent.width - (Model.hdrModeOf(root.selected) > 0 ? tuneBtn.width + parent.spacing : 0)
                   label: "HDR"
                   showLabel: true
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
+                  foreground: root.barForeground
+                  fontFamily: root.barFontFamily
                   modelValue: String(Model.hdrModeOf(root.selected))
                   options: root.hdrModeOptions
                   onChanged: function(v) { root.setHdrMode(v) }
@@ -2367,8 +2373,8 @@ Panel {
                   anchors.verticalCenter: parent.verticalCenter
                   text: root.hdrTuning ? "Done" : "Tune"
                   fontSize: Style.font.caption
-                  fontFamily: root.bar.fontFamily
-                  foreground: root.bar.foreground
+                  fontFamily: root.barFontFamily
+                  foreground: root.barForeground
                   bordered: true
                   active: root.hdrTuning
                   horizontalPadding: Style.space(10)
@@ -2393,8 +2399,8 @@ Panel {
                     return "HDR stays on. Can wash out HDR-ready LCDs."
                   return "Leave off unless a game or video needs HDR."
                 }
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
+                color: Qt.darker(root.barForeground, 1.4)
+                font.family: root.barFontFamily
                 font.pixelSize: Style.font.caption
               }
 
@@ -2410,8 +2416,8 @@ Panel {
 
                   PanelSectionHeader {
                     text: "BIT DEPTH"
-                    foreground: root.bar.foreground
-                    fontFamily: root.bar.fontFamily
+                    foreground: root.barForeground
+                    fontFamily: root.barFontFamily
                   }
 
                   Grid {
@@ -2429,8 +2435,8 @@ Panel {
                         width: bitdepthRow.cellWidth
                         text: modelData.label
                         fontSize: Style.font.caption
-                        fontFamily: root.bar.fontFamily
-                        foreground: root.bar.foreground
+                        fontFamily: root.barFontFamily
+                        foreground: root.barForeground
                         bordered: true
                         active: root.selected && Number(root.selected.bitdepth) === Number(modelData.value)
                         onClicked: root.setBitdepth(modelData.value)
@@ -2448,8 +2454,8 @@ Panel {
                         return live + ". EDID reports 8-bit; 10-bit may still work on DisplayPort."
                       return live + ". Hyprland output is 8-bit or 10-bit. Use 8-bit if screen capture fails."
                     }
-                    color: Qt.darker(root.bar.foreground, 1.4)
-                    font.family: root.bar.fontFamily
+                    color: Qt.darker(root.barForeground, 1.4)
+                    font.family: root.barFontFamily
                     font.pixelSize: Style.font.caption
                   }
                 }
@@ -2458,8 +2464,8 @@ Panel {
                   width: parent.width
                   label: "WIDE COLOR"
                   showLabel: true
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
+                  foreground: root.barForeground
+                  fontFamily: root.barFontFamily
                   modelValue: root.selected ? String(Number(root.selected.supportsWideColor) || 0) : "0"
                   options: root.wideColorOptions
                   onChanged: function(v) { root.setWideColor(v) }
@@ -2469,8 +2475,8 @@ Panel {
                   width: parent.width
                   wrapMode: Text.WordWrap
                   text: "Auto follows EDID BT.2020. Force treats this panel as wide-gamut if EDID is wrong. Off blocks wide colour even when EDID claims it."
-                  color: Qt.darker(root.bar.foreground, 1.4)
-                  font.family: root.bar.fontFamily
+                  color: Qt.darker(root.barForeground, 1.4)
+                  font.family: root.barFontFamily
                   font.pixelSize: Style.font.caption
                 }
 
@@ -2478,8 +2484,8 @@ Panel {
                   width: parent.width
                   label: "COLOR PRESET"
                   showLabel: true
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
+                  foreground: root.barForeground
+                  fontFamily: root.barFontFamily
                   modelValue: root.selected ? String(root.selected.cm || "srgb") : "srgb"
                   options: root.hdrCmOptions
                   onChanged: function(v) { root.setHdrCm(v) }
@@ -2489,8 +2495,8 @@ Panel {
                   width: parent.width
                   label: "SDR TRANSFER"
                   showLabel: true
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
+                  foreground: root.barForeground
+                  fontFamily: root.barFontFamily
                   modelValue: root.selected ? String(root.selected.sdrEotf || "default") : "default"
                   options: root.sdrEotfOptions
                   onChanged: function(v) { root.setSdrEotf(v) }
@@ -2507,8 +2513,8 @@ Panel {
                     PanelSectionHeader {
                       id: sdrBrightHeader
                       text: "SDR BRIGHTNESS"
-                      foreground: root.bar.foreground
-                      fontFamily: root.bar.fontFamily
+                      foreground: root.barForeground
+                      fontFamily: root.barFontFamily
                       anchors.left: parent.left
                       anchors.verticalCenter: parent.verticalCenter
                     }
@@ -2520,8 +2526,8 @@ Panel {
                         if (!isFinite(n) || n <= 0) n = 1.0
                         return n.toFixed(2) + "×"
                       }
-                      color: Qt.darker(root.bar.foreground, 1.4)
-                      font.family: root.bar.fontFamily
+                      color: Qt.darker(root.barForeground, 1.4)
+                      font.family: root.barFontFamily
                       font.pixelSize: Style.font.caption
                       font.bold: true
                       anchors.right: parent.right
@@ -2545,8 +2551,8 @@ Panel {
                     width: parent.width
                     wrapMode: Text.WordWrap
                     text: "Raises the desktop and other SDR apps while HDR is on. Start around 1.2 on LCDs."
-                    color: Qt.darker(root.bar.foreground, 1.4)
-                    font.family: root.bar.fontFamily
+                    color: Qt.darker(root.barForeground, 1.4)
+                    font.family: root.barFontFamily
                     font.pixelSize: Style.font.caption
                   }
                 }
@@ -2562,8 +2568,8 @@ Panel {
                     PanelSectionHeader {
                       id: sdrSatHeader
                       text: "SDR SATURATION"
-                      foreground: root.bar.foreground
-                      fontFamily: root.bar.fontFamily
+                      foreground: root.barForeground
+                      fontFamily: root.barFontFamily
                       anchors.left: parent.left
                       anchors.verticalCenter: parent.verticalCenter
                     }
@@ -2575,8 +2581,8 @@ Panel {
                         if (!isFinite(n) || n <= 0) n = 1.0
                         return n.toFixed(2) + "×"
                       }
-                      color: Qt.darker(root.bar.foreground, 1.4)
-                      font.family: root.bar.fontFamily
+                      color: Qt.darker(root.barForeground, 1.4)
+                      font.family: root.barFontFamily
                       font.pixelSize: Style.font.caption
                       font.bold: true
                       anchors.right: parent.right
@@ -2607,8 +2613,8 @@ Panel {
                     PanelSectionHeader {
                       id: blackHeader
                       text: "BLACK FLOOR"
-                      foreground: root.bar.foreground
-                      fontFamily: root.bar.fontFamily
+                      foreground: root.barForeground
+                      fontFamily: root.barFontFamily
                       anchors.left: parent.left
                       anchors.verticalCenter: parent.verticalCenter
                     }
@@ -2620,8 +2626,8 @@ Panel {
                         if (!isFinite(n)) n = 0.005
                         return n.toFixed(3) + " nits"
                       }
-                      color: Qt.darker(root.bar.foreground, 1.4)
-                      font.family: root.bar.fontFamily
+                      color: Qt.darker(root.barForeground, 1.4)
+                      font.family: root.barFontFamily
                       font.pixelSize: Style.font.caption
                       font.bold: true
                       anchors.right: parent.right
@@ -2645,8 +2651,8 @@ Panel {
                     width: parent.width
                     wrapMode: Text.WordWrap
                     text: "Lower maps SDR black closer to the panel. Enabling HDR sets 0.005 nits."
-                    color: Qt.darker(root.bar.foreground, 1.4)
-                    font.family: root.bar.fontFamily
+                    color: Qt.darker(root.barForeground, 1.4)
+                    font.family: root.barFontFamily
                     font.pixelSize: Style.font.caption
                   }
                 }
@@ -2662,8 +2668,8 @@ Panel {
                     PanelSectionHeader {
                       id: peakHeader
                       text: "SDR PEAK"
-                      foreground: root.bar.foreground
-                      fontFamily: root.bar.fontFamily
+                      foreground: root.barForeground
+                      fontFamily: root.barFontFamily
                       anchors.left: parent.left
                       anchors.verticalCenter: parent.verticalCenter
                     }
@@ -2675,8 +2681,8 @@ Panel {
                         if (!isFinite(n)) n = 200
                         return Math.round(n) + " nits"
                       }
-                      color: Qt.darker(root.bar.foreground, 1.4)
-                      font.family: root.bar.fontFamily
+                      color: Qt.darker(root.barForeground, 1.4)
+                      font.family: root.barFontFamily
                       font.pixelSize: Style.font.caption
                       font.bold: true
                       anchors.right: parent.right
@@ -2701,8 +2707,8 @@ Panel {
                     width: parent.width
                     wrapMode: Text.WordWrap
                     text: "SDR white level while HDR is on. Typical range 200–250 nits."
-                    color: Qt.darker(root.bar.foreground, 1.4)
-                    font.family: root.bar.fontFamily
+                    color: Qt.darker(root.barForeground, 1.4)
+                    font.family: root.barFontFamily
                     font.pixelSize: Style.font.caption
                   }
                 }
@@ -2714,8 +2720,8 @@ Panel {
               width: parent.width
               label: "COLOR PRESET"
               showLabel: true
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
+              foreground: root.barForeground
+              fontFamily: root.barFontFamily
               modelValue: root.selected ? String(root.selected.cm || "srgb") : "srgb"
               options: root.sdrCmOptions
               onChanged: function(v) { root.setHdrCm(v) }
@@ -2726,8 +2732,8 @@ Panel {
               width: parent.width
               label: "VRR"
               showLabel: true
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
+              foreground: root.barForeground
+              fontFamily: root.barFontFamily
               modelValue: root.selected ? String(root.selected.vrr || 0) : "0"
               options: root.vrrOptions
               onChanged: function(v) { root.setVrr(v) }
@@ -2743,8 +2749,8 @@ Panel {
                   return "HDR unavailable for this display"
                 return "VRR unavailable for this display"
               }
-              color: Qt.darker(root.bar.foreground, 1.4)
-              font.family: root.bar.fontFamily
+              color: Qt.darker(root.barForeground, 1.4)
+              font.family: root.barFontFamily
               font.pixelSize: Style.font.caption
             }
 
@@ -2760,8 +2766,8 @@ Panel {
                 PanelSectionHeader {
                   id: brightnessHeader
                   text: "BRIGHTNESS"
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
+                  foreground: root.barForeground
+                  fontFamily: root.barFontFamily
                   anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
                 }
@@ -2769,8 +2775,8 @@ Panel {
                 Text {
                   id: brightnessPercentLabel
                   text: Math.round(brightnessSlider.dragging ? brightnessSlider.liveValue : root.brightnessPercent) + "%"
-                  color: Qt.darker(root.bar.foreground, 1.4)
-                  font.family: root.bar.fontFamily
+                  color: Qt.darker(root.barForeground, 1.4)
+                  font.family: root.barFontFamily
                   font.pixelSize: Style.font.caption
                   font.bold: true
                   anchors.right: parent.right
@@ -2800,8 +2806,8 @@ Panel {
                 label: "All monitors"
                 description: "Set the same brightness on every connected display"
                 checked: root.allMonitorsBrightness
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
+                foreground: root.barForeground
+                fontFamily: root.barFontFamily
                 onClicked: root.allMonitorsBrightness = !root.allMonitorsBrightness
               }
             }
@@ -2817,8 +2823,8 @@ Panel {
                 PanelSectionHeader {
                   id: nightlightHeader
                   text: "NIGHT LIGHT"
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
+                  foreground: root.barForeground
+                  fontFamily: root.barFontFamily
                   anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
                 }
@@ -2833,8 +2839,8 @@ Panel {
                     text: root.nightlightEnabled
                       ? (Math.round(nightlightSlider.dragging ? nightlightSlider.liveValue : root.nightlightTemp) + "K")
                       : "OFF"
-                    color: Qt.darker(root.bar.foreground, 1.4)
-                    font.family: root.bar.fontFamily
+                    color: Qt.darker(root.barForeground, 1.4)
+                    font.family: root.barFontFamily
                     font.pixelSize: Style.font.caption
                     font.bold: true
                     anchors.verticalCenter: parent.verticalCenter
@@ -2842,7 +2848,7 @@ Panel {
 
                   ToggleSwitch {
                     checked: root.nightlightEnabled
-                    foreground: root.bar.foreground
+                    foreground: root.barForeground
                     onToggled: root.setNightlightEnabled(!root.nightlightEnabled)
                   }
                 }
@@ -2876,8 +2882,8 @@ Panel {
                 PanelSectionHeader {
                   id: textSizeHeader
                   text: "TEXT SIZE"
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
+                  foreground: root.barForeground
+                  fontFamily: root.barFontFamily
                   anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
                 }
@@ -2887,8 +2893,8 @@ Panel {
                   text: (textSizeSlider.dragging
                     ? root.textSizeStops[Math.round(textSizeSlider.liveValue)]
                     : root.displayedTextPx()) + "px"
-                  color: Qt.darker(root.bar.foreground, 1.4)
-                  font.family: root.bar.fontFamily
+                  color: Qt.darker(root.barForeground, 1.4)
+                  font.family: root.barFontFamily
                   font.pixelSize: Style.font.caption
                   font.bold: true
                   anchors.right: parent.right
@@ -2913,8 +2919,8 @@ Panel {
                 width: parent.width
                 wrapMode: Text.WordWrap
                 text: "Remembered per display. Omarchy only has one desk font, so Apply uses this display's size for shell, GTK, and terminals. Scale below is truly per output."
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
+                color: Qt.darker(root.barForeground, 1.4)
+                font.family: root.barFontFamily
                 font.pixelSize: Style.font.caption
               }
             }
@@ -2931,8 +2937,8 @@ Panel {
                 PanelSectionHeader {
                   id: scaleHeader
                   text: "SCALE"
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
+                  foreground: root.barForeground
+                  fontFamily: root.barFontFamily
                   anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
                 }
@@ -2940,8 +2946,8 @@ Panel {
                 Text {
                   id: scaleValue
                   text: Model.formatScale(root.selected ? root.selected.scale : 1) + "×"
-                  color: Qt.darker(root.bar.foreground, 1.4)
-                  font.family: root.bar.fontFamily
+                  color: Qt.darker(root.barForeground, 1.4)
+                  font.family: root.barFontFamily
                   font.pixelSize: Style.font.caption
                   font.bold: true
                   anchors.right: parent.right
@@ -2974,8 +2980,8 @@ Panel {
                     width: scaleRow.cellWidth
                     text: Number(modelData).toString() + "×"
                     fontSize: Style.font.caption
-                    fontFamily: root.bar.fontFamily
-                    foreground: root.bar.foreground
+                    fontFamily: root.barFontFamily
+                    foreground: root.barForeground
                     bordered: true
                     active: root.selected && Math.abs(Number(root.selected.scale) - Number(modelData)) < 0.005
                     onClicked: root.setScale(modelData, true)
@@ -2990,8 +2996,8 @@ Panel {
                 text: Model.scaleIsSharp(root.selected, root.selected ? root.selected.scale : 1)
                   ? "This output only. Whole-pixel scale — sharp."
                   : "This output only. Logical size is not whole pixels — may look soft. Try 1.25 or 1.33."
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
+                color: Qt.darker(root.barForeground, 1.4)
+                font.family: root.barFontFamily
                 font.pixelSize: Style.font.caption
               }
             }
@@ -3007,8 +3013,8 @@ Panel {
                     ? "May stay blank until a Hyprland restart or system reboot"
                     : "Include this screen in the layout"
               checked: !!(root.selected && root.selected.enabled) && !root.lastDisplayBounce
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
+              foreground: root.barForeground
+              fontFamily: root.barFontFamily
               onClicked: root.setEnabled(!(root.selected && root.selected.enabled))
             }
 
@@ -3017,8 +3023,8 @@ Panel {
               width: parent.width
               wrapMode: Text.WordWrap
               text: "This output is on a non-primary GPU. Disable can leave it blank until a Hyprland restart or a system reboot. Detect can still find it."
-              color: Qt.darker(root.bar.foreground, 1.4)
-              font.family: root.bar.fontFamily
+              color: Qt.darker(root.barForeground, 1.4)
+              font.family: root.barFontFamily
               font.pixelSize: Style.font.caption
             }
 
@@ -3028,8 +3034,8 @@ Panel {
                 ? "Primary display"
                 : "Make primary"
               fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
+              fontFamily: root.barFontFamily
+              foreground: root.barForeground
               bordered: true
               active: !!(root.selected && root.selected.identity === root.primaryId)
               onClicked: root.setPrimary()
@@ -3046,7 +3052,7 @@ Panel {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        color: root.bar && root.bar.background !== undefined ? root.bar.background : Color.background
+        color: root.bar && root.bar.background !== undefined ? root.bar.background : Commons.Color.background
         height: applyDockCol.implicitHeight + Style.space(16)
 
         Rectangle {
@@ -3054,7 +3060,7 @@ Panel {
           anchors.left: parent.left
           anchors.right: parent.right
           height: 1
-          color: Util.alpha(root.bar.foreground, 0.16)
+          color: Util.alpha(root.barForeground, 0.16)
         }
 
         Column {
@@ -3072,8 +3078,8 @@ Panel {
             text: root.pendingConfirm
               ? ("Keep this layout? Reverting in " + root.revertLeft + "s")
               : "Apply to preview on the displays. Undo throws the panel changes away."
-            color: root.bar.foreground
-            font.family: root.bar.fontFamily
+            color: root.barForeground
+            font.family: root.barFontFamily
             font.pixelSize: Style.font.caption
           }
 
@@ -3086,8 +3092,8 @@ Panel {
               width: (parent.width - parent.spacing) / 2
               text: "Apply"
               fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
+              fontFamily: root.barFontFamily
+              foreground: root.barForeground
               bordered: true
               active: true
               tooltipText: "Preview on the displays. Reverts in 20 seconds unless you Keep."
@@ -3099,8 +3105,8 @@ Panel {
               width: (parent.width - parent.spacing) / 2
               text: "Undo"
               fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
+              fontFamily: root.barFontFamily
+              foreground: root.barForeground
               bordered: true
               tooltipText: "Throw away panel changes and restore the last live layout."
               onClicked: root.undoDraft()
@@ -3111,8 +3117,8 @@ Panel {
               width: (parent.width - parent.spacing) / 2
               text: "Keep"
               fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
+              fontFamily: root.barFontFamily
+              foreground: root.barForeground
               bordered: true
               active: true
               onClicked: root.keepLayout()
@@ -3123,8 +3129,8 @@ Panel {
               width: (parent.width - parent.spacing) / 2
               text: "Revert"
               fontSize: Style.font.caption
-              fontFamily: root.bar.fontFamily
-              foreground: root.bar.foreground
+              fontFamily: root.barFontFamily
+              foreground: root.barForeground
               bordered: true
               onClicked: root.revertLayout()
             }
@@ -3152,8 +3158,8 @@ Panel {
           anchors.centerIn: parent
           implicitWidth: identCol.implicitWidth + Style.space(48)
           implicitHeight: identCol.implicitHeight + Style.space(36)
-          color: Color.popups.background
-          borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+          color: Commons.Color.popups.background
+          borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Math.max(1, Style.space(2)))
           radius: Style.cornerRadius
 
           Column {
@@ -3164,8 +3170,8 @@ Panel {
             Text {
               anchors.horizontalCenter: parent.horizontalCenter
               text: String(root.selectedIndex + 1)
-              color: root.bar ? root.bar.foreground : Color.foreground
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              color: root.barForeground
+              font.family: root.barFontFamily
               font.pixelSize: Style.font.displayLarge
               font.bold: true
             }
@@ -3174,8 +3180,8 @@ Panel {
               anchors.horizontalCenter: parent.horizontalCenter
               textFormat: Text.PlainText
               text: root.selected ? root.selected.label : ""
-              color: root.bar ? root.bar.foreground : Color.foreground
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              color: root.barForeground
+              font.family: root.barFontFamily
               font.pixelSize: Style.font.title
               font.bold: true
             }
@@ -3184,8 +3190,8 @@ Panel {
               anchors.horizontalCenter: parent.horizontalCenter
               textFormat: Text.PlainText
               text: root.selected ? root.selected.name : ""
-              color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.4)
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              color: Qt.darker(root.barForeground, 1.4)
+              font.family: root.barFontFamily
               font.pixelSize: Style.font.body
             }
           }
