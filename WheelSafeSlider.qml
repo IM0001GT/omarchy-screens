@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // Plugin-local slider. Drag or focused arrow keys change the value; the
 // wheel always scrolls the panel instead.
@@ -12,15 +13,15 @@ Item {
   property real maximum: 1
   property real step: 0.05
   property bool integer: false
-  property color trackColor: bar ? Style.selectedFillFor(bar.foreground, Color.accent) : "#333"
-  property color fillColor: bar ? bar.foreground : Color.foreground
-  property color knobColor: bar ? bar.foreground : Color.foreground
+  property color trackColor: bar ? Style.selectedFillFor(bar.foreground, Commons.Color.accent) : "#333"
+  property color fillColor: bar ? bar.foreground : Commons.Color.foreground
+  property color knobColor: bar ? bar.foreground : Commons.Color.foreground
   property bool dragging: false
   property real trackHeight: Math.max(4, Math.round(Style.spacing.controlHeight * 0.11))
   property real knobSize: Math.max(14, Math.round(Style.spacing.controlHeight * 0.38))
   property real liveValue: value
   property int tickCount: 0
-  property color tickColor: bar ? bar.background : Color.background
+  property color tickColor: bar ? bar.background : Commons.Color.background
   property bool keyAdjust: true
 
   onValueChanged: if (!dragging) liveValue = value

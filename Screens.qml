@@ -6,6 +6,7 @@ import Quickshell.Wayland
 import Quickshell.Hyprland
 import qs.Ui
 import qs.Commons
+import qs.Commons as Commons
 import "Model.js" as Model
 
 Panel {
@@ -2116,14 +2117,14 @@ Panel {
                   opacity: mon && mon.enabled ? 1 : 0.7
                   color: {
                     if (root.identifying && index === root.selectedIndex)
-                      return Util.alpha(Color.accent, 0.35)
+                      return Util.alpha(Commons.Color.accent, 0.35)
                     if (index === root.selectedIndex)
-                      return Util.alpha(Color.accent, 0.18)
+                      return Util.alpha(Commons.Color.accent, 0.18)
                     return Util.alpha(root.bar.foreground, 0.08)
                   }
                   border.width: index === root.selectedIndex ? 2 : 1
                   border.color: index === root.selectedIndex
-                    ? Util.alpha(Color.accent, 0.95)
+                    ? Util.alpha(Commons.Color.accent, 0.95)
                     : Util.alpha(root.bar.foreground, mon && mon.enabled ? 0.28 : 0.45)
 
                   Column {
@@ -2171,7 +2172,7 @@ Panel {
                 y: canvas.pad
                 width: 1
                 height: canvas.height - canvas.pad * 2
-                color: Color.accent
+                color: Commons.Color.accent
                 opacity: 0.85
               }
 
@@ -2181,7 +2182,7 @@ Panel {
                 y: canvas.cy(Number(root.guideY)) - 0.5
                 width: canvas.width - canvas.pad * 2
                 height: 1
-                color: Color.accent
+                color: Commons.Color.accent
                 opacity: 0.85
               }
 
@@ -3046,7 +3047,7 @@ Panel {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        color: root.bar && root.bar.background !== undefined ? root.bar.background : Color.background
+        color: root.bar && root.bar.background !== undefined ? root.bar.background : Commons.Color.background
         height: applyDockCol.implicitHeight + Style.space(16)
 
         Rectangle {
@@ -3152,8 +3153,8 @@ Panel {
           anchors.centerIn: parent
           implicitWidth: identCol.implicitWidth + Style.space(48)
           implicitHeight: identCol.implicitHeight + Style.space(36)
-          color: Color.popups.background
-          borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+          color: Commons.Color.popups.background
+          borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Math.max(1, Style.space(2)))
           radius: Style.cornerRadius
 
           Column {
@@ -3164,7 +3165,7 @@ Panel {
             Text {
               anchors.horizontalCenter: parent.horizontalCenter
               text: String(root.selectedIndex + 1)
-              color: root.bar ? root.bar.foreground : Color.foreground
+              color: root.bar ? root.bar.foreground : Commons.Color.foreground
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.displayLarge
               font.bold: true
@@ -3174,7 +3175,7 @@ Panel {
               anchors.horizontalCenter: parent.horizontalCenter
               textFormat: Text.PlainText
               text: root.selected ? root.selected.label : ""
-              color: root.bar ? root.bar.foreground : Color.foreground
+              color: root.bar ? root.bar.foreground : Commons.Color.foreground
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.title
               font.bold: true
@@ -3184,7 +3185,7 @@ Panel {
               anchors.horizontalCenter: parent.horizontalCenter
               textFormat: Text.PlainText
               text: root.selected ? root.selected.name : ""
-              color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.4)
+              color: Qt.darker(root.bar ? root.bar.foreground : Commons.Color.foreground, 1.4)
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.body
             }
