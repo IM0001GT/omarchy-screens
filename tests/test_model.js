@@ -149,4 +149,25 @@ const beside = Model.snapMove(pair, 1, 1920, 150, 96)
 assert.strictEqual(beside.x, 1920)
 assert.strictEqual(beside.y, 150)
 
+const fallback = "#theme"
+assert.strictEqual(Model.paintedBarColor(null, fallback), fallback)
+assert.strictEqual(Model.paintedBarColor(undefined, fallback), fallback)
+assert.strictEqual(
+  Model.paintedBarColor({ barForeground: "#painted", foreground: "#plain" }, fallback),
+  "#painted"
+)
+assert.strictEqual(Model.paintedBarColor({ foreground: "#plain" }, fallback), "#plain")
+assert.strictEqual(Model.paintedBarColor({ barForeground: null, foreground: "#plain" }, fallback), "#plain")
+assert.strictEqual(Model.paintedBarColor({}, fallback), fallback)
+
+assert.strictEqual(Model.paintedBarBackground(null, fallback), fallback)
+assert.strictEqual(Model.paintedBarBackground({ background: "#bg" }, fallback), "#bg")
+assert.strictEqual(Model.paintedBarBackground({}, fallback), fallback)
+
+assert.strictEqual(Model.barFontFamily(null, "Omarchy"), "Omarchy")
+assert.strictEqual(Model.barFontFamily({ fontFamily: null }, "Omarchy"), "Omarchy")
+assert.strictEqual(Model.barFontFamily({ fontFamily: "" }, "Omarchy"), "Omarchy")
+assert.strictEqual(Model.barFontFamily({}, "Omarchy"), "Omarchy")
+assert.strictEqual(Model.barFontFamily({ fontFamily: "Inter" }, "Omarchy"), "Inter")
+
 console.log("ok")

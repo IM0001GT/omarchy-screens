@@ -100,6 +100,7 @@ class WorkspacePlan(unittest.TestCase):
         self.assertEqual(plan[0]["ids"], list(range(1, 11)))
 
     def test_workspace_rules_are_not_written(self):
+        self.ctl.omarchy_places_workspaces = lambda: True
         self.ctl.save_store(dict(self.ctl.load_store(), manageWorkspaces=True))
         lines = self.ctl.workspace_rule_lines(
             [self.left, self.right], self.right["identity"]
@@ -230,6 +231,67 @@ class WorkspaceHandoff(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_probe_needs_both_packaged_files(self):
+        root = os.path.join(self.tmp.name, "share")
+        self.ctl.omarchy_share = lambda: root
+        self.assertFalse(self.ctl.omarchy_places_workspaces())
+        os.makedirs(os.path.join(root, "shell", "Commons"), exist_ok=True)
+        with open(os.path.join(root, "shell", "Commons", "ShellIpc.qml"), "w", encoding="utf-8") as fh:
+            fh.write("pragma Singleton\n")
+        self.assertFalse(self.ctl.omarchy_places_workspaces())
+        hypr = os.path.join(root, "default", "hypr")
+        os.makedirs(hypr, exist_ok=True)
+        with open(os.path.join(hypr, "monitor-workspaces.lua"), "w", encoding="utf-8") as fh:
+            fh.write("-- place\n")
+        self.assertTrue(self.ctl.omarchy_places_workspaces())
+
+    def test_legacy_shell_keeps_existing_pin_lines(self):
+        self.ctl.omarchy_places_workspaces = lambda: False
+        self.ctl.save_store(dict(self.ctl.load_store(), manageWorkspaces=True))
+        block = "\n".join(self.ctl.managed_block_lines([]))
+        self.assertIn('hl.workspace_rule({ workspace = "6"', block)
+        self.assertIn("LG HDR 4K", block)
+
+    def test_legacy_preserve_copies_only_pin_lines(self):
+        self.ctl.omarchy_places_workspaces = lambda: False
+        with open(self.ctl.MONITORS_LUA, "w", encoding="utf-8") as fh:
+            fh.write(
+                "-- BEGIN im0001gt.screens\n"
+                'hl.monitor({ output = "eDP-1" })\n'
+                'os.execute("id")\n'
+                'hl.workspace_rule({ workspace = "1", monitor = "eDP-1" })\n'
+                + ("hl.workspace_rule(" + ("x" * 2100) + ")\n")
+                + "-- END im0001gt.screens\n"
+            )
+        kept = self.ctl.preserved_workspace_rule_lines()
+        self.assertEqual(len(kept), 1)
+        self.assertIn('workspace = "1"', kept[0])
+        block = "\n".join(self.ctl.managed_block_lines([]))
+        self.assertNotIn("os.execute", block)
+
+    def test_prepare_on_legacy_does_not_release_or_install(self):
+        calls = []
+        self.ctl.omarchy_places_workspaces = lambda: False
+        self.ctl.install_workspaces_plugin = lambda: calls.append("install") or True
+        self.ctl.release_workspace_rules = lambda reload=False: calls.append("release") or True
+        self.ctl.retire_legacy_workspaces = lambda: calls.append("retire") or True
+        result = self.ctl.prepare_workspaces_for_shell()
+        self.assertEqual(calls, ["retire"])
+        self.assertEqual(result, {"installed": False, "released": False, "retired": True})
+
+    def test_prepare_on_45_installs_and_releases(self):
+        calls = []
+        self.ctl.omarchy_places_workspaces = lambda: True
+        self.ctl.install_workspaces_plugin = lambda: calls.append("install") or True
+        self.ctl.release_workspace_rules = lambda reload=False: calls.append("release") or True
+        self.ctl.retire_legacy_workspaces = lambda: calls.append("retire") or True
+        result = self.ctl.prepare_workspaces_for_shell()
+        self.assertEqual(calls, ["install", "release"])
+        self.assertEqual(
+            result,
+            {"installed": True, "released": True, "retired": False},
+        )
 
     def test_release_strips_rules_and_keeps_labels(self):
         changed = self.ctl.release_workspace_rules(reload=False)
@@ -1203,6 +1265,58 @@ class WorkspacesCompanionPlugin(unittest.TestCase):
 
     def companion_dir(self):
         return os.path.join(self.plugins, "im0001gt.screens.workspaces")
+
+    def isolate_user_files(self):
+        base = os.path.join(self.tmp.name, "user")
+        self.ctl.BACKUP_DIR = os.path.join(base, "state")
+        self.ctl.PROFILES_PATH = os.path.join(self.ctl.BACKUP_DIR, "profiles.json")
+        self.ctl.ORIGINAL_BACKUP = os.path.join(self.ctl.BACKUP_DIR, "original-monitors.lua")
+        self.ctl.WORKSPACES_JSON = os.path.join(self.ctl.BACKUP_DIR, "workspaces.json")
+        self.ctl.PANEL_STATE = os.path.join(self.ctl.BACKUP_DIR, "panel.json")
+        self.ctl.REVERT_LUA = os.path.join(self.ctl.BACKUP_DIR, "revert-monitors.lua")
+        self.ctl.SHELL_JSON = os.path.join(base, "omarchy", "shell.json")
+        self.ctl.MONITORS_LUA = os.path.join(base, "hypr", "monitors.lua")
+        self.ctl.BINDINGS_LUA = os.path.join(base, "hypr", "bindings.lua")
+        self.ctl.LAYOUTS_DIR = os.path.join(base, "layouts")
+        self.ctl.BRIGHTNESS_LINK = os.path.join(base, "bin", "omarchy-brightness-display")
+        os.makedirs(os.path.dirname(self.ctl.SHELL_JSON), exist_ok=True)
+        os.makedirs(os.path.dirname(self.ctl.MONITORS_LUA), exist_ok=True)
+        os.makedirs(self.ctl.LAYOUTS_DIR, exist_ok=True)
+        os.makedirs(os.path.dirname(self.ctl.BRIGHTNESS_LINK), exist_ok=True)
+        os.makedirs(self.ctl.BACKUP_DIR, exist_ok=True)
+        with open(self.ctl.MONITORS_LUA, "w", encoding="utf-8") as fh:
+            fh.write('hl.monitor({ output = "eDP-1" })\n')
+        with open(self.ctl.BINDINGS_LUA, "w", encoding="utf-8") as fh:
+            fh.write("-- binds\n")
+        with open(self.ctl.SHELL_JSON, "w", encoding="utf-8") as fh:
+            json.dump({"bar": {"layout": {"left": ["im0001gt.screens.workspaces"]}}}, fh)
+        self.ctl.save_store({"workspacesBarId": "omarchy.workspaces"})
+
+    def test_retire_puts_stock_workspaces_back(self):
+        self.isolate_user_files()
+        self.assertTrue(self.ctl.install_workspaces_plugin())
+        self.assertTrue(self.ctl.companion_qml_has_shell_ipc())
+        self.assertTrue(self.ctl.retire_legacy_workspaces())
+        self.assertFalse(os.path.isdir(self.companion_dir()))
+        with open(self.ctl.SHELL_JSON, encoding="utf-8") as fh:
+            config = json.load(fh)
+        self.assertEqual(config["bar"]["layout"]["left"], ["omarchy.workspaces"])
+
+    def test_retire_leaves_a_companion_the_shell_can_load(self):
+        self.isolate_user_files()
+        self.assertTrue(self.ctl.install_workspaces_plugin())
+        qml_path = os.path.join(self.companion_dir(), "Workspaces.qml")
+        with open(qml_path, encoding="utf-8") as fh:
+            text = fh.read().replace("ShellIpc", "Item")
+        with open(qml_path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        self.assertNotIn("ShellIpc", text)
+        self.assertTrue(self.ctl.is_generated_workspaces_plugin(self.companion_dir()))
+        self.assertFalse(self.ctl.retire_legacy_workspaces())
+        self.assertTrue(os.path.isdir(self.companion_dir()))
+        with open(self.ctl.SHELL_JSON, encoding="utf-8") as fh:
+            config = json.load(fh)
+        self.assertEqual(config["bar"]["layout"]["left"], ["im0001gt.screens.workspaces"])
 
     def test_install_writes_valid_companion_manifest(self):
         changed = self.ctl.install_workspaces_plugin()

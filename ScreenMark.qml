@@ -1,10 +1,11 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // Two aspect-true tiles. Distinct from stock Display's 󰍹 / 󰍺.
 Item {
   id: root
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   implicitWidth: Style.font.icon
   implicitHeight: Style.font.icon
 

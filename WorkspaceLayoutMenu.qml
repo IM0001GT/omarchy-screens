@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -17,8 +18,8 @@ KeyboardPanel {
   contentHeight: fittedContentHeight(menuCol.implicitHeight)
 
   readonly property int slot: Model.workspaceSlot(root.workspaceId)
-  readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
-  readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+  readonly property color fg: Model.paintedBarColor(root.bar, Commons.Color.foreground)
+  readonly property string fontFamily: Model.barFontFamily(root.bar, Style.font.family)
 
   function tint(alpha) {
     return Qt.rgba(root.fg.r, root.fg.g, root.fg.b, alpha)

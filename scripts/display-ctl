@@ -1882,6 +1882,40 @@ def workspace_rule_lines(monitors, primary=""):
     return []
 
 
+def omarchy_share():
+    env = os.environ.get("OMARCHY_PATH", "").strip()
+    if env:
+        return os.path.abspath(env)
+    return "/usr/share/omarchy"
+
+
+def omarchy_places_workspaces():
+    """True when this shell can load the 4.5 workspace widget and place blocks."""
+    base = omarchy_share()
+    if not base or not os.path.isabs(base) or not os.path.isdir(base):
+        return False
+    shell_ipc = os.path.join(base, "shell", "Commons", "ShellIpc.qml")
+    monitor_ws = os.path.join(base, "default", "hypr", "monitor-workspaces.lua")
+    return os.path.isfile(shell_ipc) and os.path.isfile(monitor_ws)
+
+
+def preserved_workspace_rule_lines():
+    """Copy existing pin lines through a rewrite. Do not invent or eval them."""
+    text = read_text(MONITORS_LUA) if os.path.isfile(MONITORS_LUA) else ""
+    if MANAGED_BEGIN not in text or MANAGED_END not in text:
+        return []
+    block = text.split(MANAGED_BEGIN, 1)[1].split(MANAGED_END, 1)[0]
+    kept = []
+    for line in block.split("\n"):
+        stripped = line.strip()
+        if not stripped.startswith("hl.workspace_rule(") or len(stripped) > 2000:
+            continue
+        kept.append(line)
+        if len(kept) >= 200:
+            break
+    return kept
+
+
 def managed_block_lines(monitors):
     used = set()
     inner = [MANAGED_BEGIN]
@@ -1902,8 +1936,11 @@ def managed_block_lines(monitors):
         % (max_vrr, auto_hdr_render(monitors))
     )
     store = load_store()
-    if store.get("manageWorkspaces"):
-        inner.extend(workspace_rule_lines(monitors, store.get("primary") or ""))
+    if omarchy_places_workspaces():
+        if store.get("manageWorkspaces"):
+            inner.extend(workspace_rule_lines(monitors, store.get("primary") or ""))
+    else:
+        inner.extend(preserved_workspace_rule_lines())
     inner.append(MANAGED_END)
     return inner
 
@@ -3758,7 +3795,7 @@ def scale_step(requested):
 def claim_monitors(force=False):
     existing = read_text(MONITORS_LUA) if os.path.isfile(MONITORS_LUA) else ""
     ensure_original_backup(existing)
-    install_workspaces_plugin()
+    places = prepare_workspaces_for_shell()
     bindings_changed = maybe_install_scale_bindings()
     store = load_store()
     conflicts = detect_conflicts()
@@ -3786,7 +3823,7 @@ def claim_monitors(force=False):
         store["claimedMonitors"] = True
         save_store(store)
         recover_internal(quiet=True)
-    released = release_workspace_rules(reload=False)
+    released = bool(places.get("released"))
     if wrote or bindings_changed or released:
         reload_hypr()
     return {
@@ -4724,6 +4761,52 @@ def swap_bar_workspaces(enable):
     save_shell_json(config)
 
 
+def companion_qml_has_shell_ipc():
+    dest = workspaces_plugin_dir()
+    if not is_generated_workspaces_plugin(dest):
+        return False
+    qml_path = os.path.join(dest, "Workspaces.qml")
+    try:
+        st = os.lstat(qml_path)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode) or st.st_size > 1024 * 1024:
+        return False
+    data = read_bytes(qml_path)
+    return bool(data) and b"ShellIpc" in data
+
+
+def retire_legacy_workspaces():
+    """Take a 4.5 companion off a shell that cannot load ShellIpc."""
+    if not companion_qml_has_shell_ipc():
+        return False
+    config = load_shell_json() or {}
+    _section, _index, eid, _entry = find_workspaces_slot(config)
+    swapped = False
+    if eid == OUR_WS_WIDGET:
+        swap_bar_workspaces(False)
+        swapped = True
+    removed = remove_workspaces_plugin()
+    return bool(swapped or removed)
+
+
+def prepare_workspaces_for_shell():
+    """Install the Screens workspace widget only where Omarchy 4.5 can run it."""
+    if omarchy_places_workspaces():
+        installed = install_workspaces_plugin()
+        released = release_workspace_rules(reload=False)
+        return {
+            "installed": bool(installed),
+            "released": bool(released),
+            "retired": False,
+        }
+    return {
+        "installed": False,
+        "released": False,
+        "retired": bool(retire_legacy_workspaces()),
+    }
+
+
 def snapshot_monitors_for_write():
     live = snapshot()["monitors"]
     known = {clean_connector(m.get("name")) for m in live if clean_connector(m.get("name"))}
@@ -4731,6 +4814,10 @@ def snapshot_monitors_for_write():
 
 
 def set_manage_workspaces(on):
+    if not omarchy_places_workspaces():
+        retire_legacy_workspaces()
+        print(json.dumps(snapshot(), separators=(",", ":")))
+        return 0
     release_workspace_rules(reload=True)
     install_workspaces_plugin()
     config = load_shell_json() or {}
@@ -4955,6 +5042,10 @@ def main(argv):
         print("idle: off|on|notice", file=sys.stderr)
         return 2
     if cmd == "release-workspaces":
+        if not omarchy_places_workspaces():
+            retire_legacy_workspaces()
+            print("unchanged")
+            return 0
         changed = release_workspace_rules(reload=True)
         install_workspaces_plugin()
         config = load_shell_json() or {}

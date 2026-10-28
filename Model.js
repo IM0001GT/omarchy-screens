@@ -697,6 +697,30 @@ function normalizeWorkspaceLabels(data) {
   return { enabled: false, labels: labels, monitors: [], layouts: {}, total: 10 }
 }
 
+// Theme color the bar is painting. Prefer barForeground: that is the color
+// Omarchy 4.5 actually draws, including a transparent bar. Older bars, and
+// some third-party bars, only have foreground. A missing bar falls back to
+// the caller, which passes Commons.Color so Qt 6.12's Color type cannot win.
+function paintedBarColor(bar, fallback) {
+  if (!bar) return fallback
+  if (bar.barForeground !== undefined && bar.barForeground !== null) return bar.barForeground
+  if (bar.foreground !== undefined && bar.foreground !== null) return bar.foreground
+  return fallback
+}
+
+function paintedBarBackground(bar, fallback) {
+  if (!bar) return fallback
+  if (bar.background !== undefined && bar.background !== null) return bar.background
+  return fallback
+}
+
+function barFontFamily(bar, fallback) {
+  if (!bar || bar.fontFamily === undefined || bar.fontFamily === null) return fallback
+  var family = String(bar.fontFamily)
+  if (!family) return fallback
+  return family
+}
+
 function monitorBlocks(text) {
   var next = {}
   var raw = String(text || "")
@@ -907,6 +931,9 @@ if (typeof module !== "undefined") {
     presetIcon: presetIcon,
     cleanWorkspaceName: cleanWorkspaceName,
     normalizeWorkspaceLabels: normalizeWorkspaceLabels,
+    paintedBarColor: paintedBarColor,
+    paintedBarBackground: paintedBarBackground,
+    barFontFamily: barFontFamily,
     monitorBlocks: monitorBlocks,
     safeConnector: safeConnector,
     workspacePresetIcons: workspacePresetIcons,

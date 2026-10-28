@@ -1,5 +1,7 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
+import "Model.js" as Model
 
 // Plugin-local slider. Drag or focused arrow keys change the value; the
 // wheel always scrolls the panel instead.
@@ -12,15 +14,15 @@ Item {
   property real maximum: 1
   property real step: 0.05
   property bool integer: false
-  property color trackColor: bar ? Style.selectedFillFor(bar.foreground, Color.accent) : "#333"
-  property color fillColor: bar ? bar.foreground : Color.foreground
-  property color knobColor: bar ? bar.foreground : Color.foreground
+  property color trackColor: bar ? Style.selectedFillFor(Model.paintedBarColor(bar, Commons.Color.foreground), Commons.Color.accent) : "#333"
+  property color fillColor: Model.paintedBarColor(bar, Commons.Color.foreground)
+  property color knobColor: Model.paintedBarColor(bar, Commons.Color.foreground)
   property bool dragging: false
   property real trackHeight: Math.max(4, Math.round(Style.spacing.controlHeight * 0.11))
   property real knobSize: Math.max(14, Math.round(Style.spacing.controlHeight * 0.38))
   property real liveValue: value
   property int tickCount: 0
-  property color tickColor: bar ? bar.background : Color.background
+  property color tickColor: Model.paintedBarBackground(bar, Commons.Color.background)
   property bool keyAdjust: true
 
   onValueChanged: if (!dragging) liveValue = value
@@ -122,7 +124,7 @@ Item {
     height: root.knobSize
     radius: root.knobSize / 2
     color: root.knobColor
-    border.color: root.bar ? root.bar.background : "#101315"
+    border.color: Model.paintedBarBackground(root.bar, Commons.Color.background)
     border.width: Math.max(1, Style.space(2))
     anchors.verticalCenter: track.verticalCenter
     x: Math.max(0, Math.min(track.width - width, track.width * root.progress - width / 2))

@@ -131,6 +131,8 @@ omarchy restart shell
 
 **1.16.0** leaves workspace placement to Omarchy 4.5. Each screen keeps its own 1–10, and Screens no longer writes workspace rules or layout files. Names and icons stay: right-click a number on the bar. A name is at most 48 characters, and an icon is one preset. An existing pin block in `monitors.lua` is removed once; the monitor lines stay.
 
+**1.16.1** follows the theme under Qt 6.12. Palette reads use `Commons.Color`, because Qt's own `Color` type otherwise hides Omarchy's. Bar text waits until the bar exists, so a theme change does not fill the journal. Thanks to [Eidan78](https://github.com/Eidan78) for the report and the patch. The 4.5 workspace handoff runs only when the shell ships `ShellIpc` and `monitor-workspaces.lua`. On an older shell, Screens leaves workspace pins in place, and if 1.16.0 already installed a companion the shell cannot load, that companion comes off the bar and the stock workspace numbers go back. Names and icons still need Omarchy 4.5.
+
 ## Uninstall
 
 Restore the pre-Screens files first, then remove the plugin:
