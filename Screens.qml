@@ -226,6 +226,7 @@ Panel {
 
   function refreshBrightness() {
     if (setBrightnessProc.running) return
+    var brightnessSlider = root.panelPart("brightnessSlider")
     if (brightnessSlider && brightnessSlider.dragging) return
     var name = root.brightnessMonitor()
     if (!name) {
@@ -286,6 +287,7 @@ Panel {
 
   function refreshNightlight() {
     if (setNightlightProc.running) return
+    var nightlightSlider = root.panelPart("nightlightSlider")
     if (nightlightSlider && nightlightSlider.dragging) return
     if (!nightlightProbeProc.running) nightlightProbeProc.running = true
   }
@@ -691,7 +693,7 @@ Panel {
 
   function setScale(scale, reveal) {
     root.resizeSelected(function(m) { m.scale = Math.round(Number(scale) * 100) / 100 })
-    if (reveal) Qt.callLater(function() { root.revealItem(scaleSection) })
+    if (reveal) Qt.callLater(function() { root.revealItem(root.panelPart("scaleSection")) })
   }
 
   function setTransform(value) {
@@ -732,7 +734,10 @@ Panel {
       if (m.minLuminance === undefined || Number(m.minLuminance) < 0)
         m.minLuminance = 0
     })
-    if (n > 0) Qt.callLater(function() { root.revealItem(hdrTuneSection.visible ? hdrTuneSection : hdrRow) })
+    if (n > 0) Qt.callLater(function() {
+      var hdrTuneSection = root.panelPart("hdrTuneSection")
+      root.revealItem(hdrTuneSection && hdrTuneSection.visible ? hdrTuneSection : root.panelPart("hdrRow"))
+    })
   }
 
   function setBitdepth(value) {
@@ -790,7 +795,15 @@ Panel {
     root.layoutDirty = true
   }
 
+  // The panel's content is built the first time it opens (panelContent),
+  // so the parts of it that code out here reaches are null until then.
+  function panelPart(name) {
+    var content = panelContent.item
+    return content ? content[name] : null
+  }
+
   function revealItem(item) {
+    var panelFlick = root.panelPart("panelFlick")
     if (!item || !panelFlick) return
     if (panelFlick.contentHeight <= panelFlick.height) return
     var y = item.mapToItem(panelFlick.contentItem, 0, 0).y
@@ -873,6 +886,7 @@ Panel {
     root.namingProfile = true
     if (!root.profileName) root.profileName = root.activeProfile
     Qt.callLater(function() {
+      var profileNameField = root.panelPart("profileNameField")
       if (profileNameField) profileNameField.forceActiveFocus()
     })
   }
@@ -1296,6 +1310,7 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        var brightnessSlider = root.panelPart("brightnessSlider")
         if (brightnessSlider && brightnessSlider.dragging) return
         var line = String(text || "").trim().split("\n")[0]
         var n = parseInt(line, 10)
@@ -1382,6 +1397,7 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        var nightlightSlider = root.panelPart("nightlightSlider")
         if (nightlightSlider && nightlightSlider.dragging) return
         try {
           var data = JSON.parse(text || "{}")
@@ -1453,12 +1469,45 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: panelContent.item
     contentWidth: panel.fittedContentWidth(Style.space(480))
-    contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight)
+    contentHeight: panel.fittedContentHeight(panelContent.item ? panelContent.item.implicitHeight : 0)
+    onOpenChanged: if (open) panelContent.built = true
+
+    // Built the first time the panel opens, then kept, instead of on every
+    // monitor at shell start: a built panel re-evaluates all of its bindings
+    // on each theme change, even while closed. A latched Loader rather than
+    // KeyboardPanel's `content` (Omarchy 4.5+) so older shells keep working.
+    Loader {
+      id: panelContent
+      property bool built: false
+      anchors.fill: parent
+      focus: true
+      active: built || panel.open
+      sourceComponent: panelBody
+      onLoaded: {
+        // KeyboardPanel may have looked for focusTarget before this opening
+        // built it, so hand the keys over here as well.
+        if (panel.open) Qt.callLater(function() {
+          if (panel.open && panelContent.item) panelContent.item.forceActiveFocus()
+        })
+      }
+    }
+  }
+
+  Component {
+    id: panelBody
 
     PanelKeyCatcher {
       id: keyCatcher
+      property alias panelFlick: panelFlick
+      property alias brightnessSlider: brightnessSlider
+      property alias nightlightSlider: nightlightSlider
+      property alias scaleSection: scaleSection
+      property alias hdrRow: hdrRow
+      property alias hdrTuneSection: hdrTuneSection
+      property alias profileNameField: profileNameField
+      implicitHeight: panelColumn.implicitHeight
       anchors.fill: parent
       blocked: {
         var win = panel.QsWindow ? panel.QsWindow.window : null
@@ -3139,7 +3188,7 @@ Panel {
         }
       }
     }
-    }
+  }
 
   Loader {
     active: root.identifying && !!root.identifyScreen
